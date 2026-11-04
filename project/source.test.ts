@@ -110,7 +110,10 @@ function fakeBb(overrides: Fake = {}) {
         calls.push({ method: "diffPatch", args });
         return { outcome: "available", patches: args.paths.map((path) => ({ path, patch: `@@ ${path}`, truncated: false })) };
       },
-      pullRequest: async () => ({ outcome: "absent" }),
+    },
+    plugins: {
+      callRpc: async (args: { input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) =>
+        args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "absent" }]))),
     },
     ...overrides,
   };

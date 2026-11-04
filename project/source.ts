@@ -4,6 +4,7 @@
 // environment; Threads lists only threads of that thread's project, and any
 // other id is "not found". Environments has its own source (environments.ts).
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { z } from "zod";
 import {
   matchesPathFilter,
   RUNNING,
@@ -139,7 +140,33 @@ export function changedFile(file: DiffFileEntry, inline: boolean): ChangedFile {
   };
 }
 
-interface PullRequestEntry {
+/** bb's built-in plugin that reads each environment's pull request from GitHub. */
+const PR_STATUS_PLUGIN = "bb--github-pr-status";
+const pullRequestRows = z.record(
+  z.string(),
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("available"), pullRequest: z.custom<PullRequestEntry>((value) => typeof value === "object" && value !== null) }),
+    z.object({ outcome: z.literal("absent") }),
+    z.object({ outcome: z.literal("unavailable"), message: z.string() }),
+  ]),
+);
+export type PullRequestAnswer = z.infer<typeof pullRequestRows>[string];
+
+/**
+ * An environment's pull request. bb serves it from its github-pr-status
+ * plugin; the SDK's former environments.pullRequest is gone.
+ */
+export async function readPullRequest(sdk: BbPluginApi["sdk"], environmentId: string): Promise<PullRequestAnswer> {
+  const rows = await sdk.plugins.callRpc({
+    pluginId: PR_STATUS_PLUGIN,
+    method: "pullRequests",
+    input: { keys: [environmentId] },
+    outputSchema: pullRequestRows,
+  });
+  return rows[environmentId] ?? { outcome: "unavailable", message: "BB's pull request plugin had no answer for this environment" };
+}
+
+export interface PullRequestEntry {
   readonly number: number;
   readonly title: string;
   readonly url: string;
@@ -547,7 +574,7 @@ export function createProjectSource(bb: BbPluginApi, storage: SnapshotStorage = 
         const environment = await threadEnvironment(sdk, threadId);
         if (!environment.ok) return environment;
         const [answer, env] = await Promise.all([
-          sdk.environments.pullRequest({ environmentId: environment.environmentId }),
+          readPullRequest(sdk, environment.environmentId),
           sdk.environments.get({ environmentId: environment.environmentId }),
         ]);
         if (answer.outcome === "unavailable") return failure("unavailable", answer.message);

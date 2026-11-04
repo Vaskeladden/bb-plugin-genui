@@ -141,9 +141,11 @@ function fakeBb(options: { status?: (environmentId: string, base: string | undef
         const branch = environments[args.environmentId]?.branchName ?? "main";
         return { outcome: "available", workspace: workspace(branch) };
       },
-      pullRequest: async (args: { environmentId: string }) => {
-        calls.push({ method: "environments.pullRequest", args });
-        return { outcome: "available", pullRequest: PULL_REQUEST };
+    },
+    plugins: {
+      callRpc: async (args: { pluginId: string; method: string; input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) => {
+        calls.push({ method: `${args.pluginId}.${args.method}`, args: args.input });
+        return args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "available", pullRequest: PULL_REQUEST }])));
       },
     },
   };
@@ -255,7 +257,7 @@ describe("environments: one environment's detail", () => {
     const detail = (await source.environment("thr_mine00", "env_main")) as EnvironmentDetail;
     expect(detail.checkout).toMatchObject({ ok: true, onBase: true, ahead: null, behind: null });
     expect(detail.pull).toBeNull();
-    expect(calls.some((call) => call.method === "environments.pullRequest")).toBe(false);
+    expect(calls.some((call) => call.method === "bb--github-pr-status.pullRequests")).toBe(false);
   });
 
   it("says a missing workspace folder honestly", async () => {
@@ -297,7 +299,10 @@ function fakeBbWithoutBase() {
         calls.push({ method: "environments.status", args });
         return { outcome: "available", workspace: workspace("wt/env_wt01") };
       },
-      pullRequest: async () => ({ outcome: "absent" }),
+    },
+    plugins: {
+      callRpc: async (args: { input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) =>
+        args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "absent" }]))),
     },
   };
   return { source: createEnvironmentsSource(sdk as unknown as BbPluginApi["sdk"]), calls };
