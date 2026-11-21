@@ -1,6 +1,6 @@
 // One fenced block in an assistant reply: ```ui renders the spec language
-// through LiveUi, ```app renders a sandboxed HTML app. Both the BB fence slot
-// and the DOM overlay mount this, so they behave the same.
+// through LiveUi, ```app renders a sandboxed HTML app. The BB fence slot
+// (SlotFence) and the Status board mount this, so they behave the same.
 import { memo, useCallback, useMemo, useRef } from "react";
 import { useBbNavigate, useComposers, useSdk, type ExperimentalLiveFileTarget } from "@get-bb/plugin-sdk/app";
 import { compileStreaming } from "../core";
@@ -76,7 +76,7 @@ export const Fence = memo(function Fence({
 }: {
   language: FenceLanguage;
   code: string;
-  /** UI input stopped (closed or unclosed); apps arrive here only closed or streaming. The overlay uses text settlement. */
+  /** UI input stopped (closed or unclosed); apps arrive here only closed or streaming. */
   complete: boolean;
   stateKey: string;
   threadId: string;

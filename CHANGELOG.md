@@ -9,6 +9,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 - **Status board.** `show_board` puts a checked report in a *Status board* tab in the thread's side panel, which opens by itself; every publish is kept as a version, as an update of the board that is there or as a new board. `bb genui show-board <file>` does the same for an agent without the tool, and `bb genui board` prints the current board.
 
+### Changed
+- Built against `@get-bb/plugin-sdk` 0.6.157 and BB's current slots. The Status board is a thread tab (`experimental_tab`) that a thread header row opens; Changes, Commits and Environments read git state from BB's Git plugin (`bb--git`), which took over the SDK's own status and diff reads. Requires BB 0.50 or later.
+
+### Removed
+- The DOM overlay that rendered blocks on BB before the code fence renderer slot. Every BB this version runs on has the slot.
+
 ## [0.3.1] - 2026-10-22
 
 ### Fixed

@@ -98,7 +98,7 @@ For anything the components can't express, such as a small game or a simulation,
 bb plugin install https://github.com/ComicBit/bb-plugin-genui.git
 ```
 
-Requires BB 0.45 or later. Agent sessions started after the install pick up the components. To update later, run `bb plugin update genui`; what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+Requires BB 0.50 or later. Agent sessions started after the install pick up the components. To update later, run `bb plugin update genui`; what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 To try it, ask an agent something with a shape: *"Compare Postgres, SQLite and DuckDB for a local analytics tool"*, *"Plan a two-day trip to Lisbon"*, *"Run the tests and show me what failed"*. Or let the plugin open a subthread for you:
 
@@ -117,9 +117,7 @@ bb genui ask "Plan a two-day trip to Lisbon"
 
 ## How it fits into BB
 
-On BB versions with `experimental_codeFenceRenderer` (merged in [get-bb/bb#5387](https://github.com/get-bb/bb/pull/5387)), BB hands `ui` and `app` fences directly to the plugin. UI renders while streaming and shows final diagnostics when the fence closes or the reply ends. Apps draw their markup while streaming but run only when their fence closes; an interrupted, unclosed app remains readable source. BB preserves the renderer instance throughout streaming and falls back to its code block if a language has conflicting plugins or a renderer crashes.
-
-BB 0.45 and other versions without the slot still use the DOM overlay. That fallback considers a block complete after its text stops changing for 1.5 seconds: it cannot distinguish a closed fence from a pause or interruption. Changes to BB's page layout can turn those UIs back into code until the plugin catches up. State keys stay the same across the two rendering paths.
+Through `experimental_codeFenceRenderer` (merged in [get-bb/bb#5387](https://github.com/get-bb/bb/pull/5387)), BB hands `ui` and `app` fences directly to the plugin. UI renders while streaming and shows final diagnostics when the fence closes or the reply ends. Apps draw their markup while streaming but run only when their fence closes; an interrupted, unclosed app remains readable source. BB preserves the renderer instance throughout streaming and falls back to its code block if a language has conflicting plugins or a renderer crashes.
 
 The full picture, from the instructions agents receive to how blocks stay steady while BB recycles rows as you scroll, is in [docs/architecture.md](docs/architecture.md).
 

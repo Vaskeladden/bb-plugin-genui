@@ -36,8 +36,8 @@ const bb = vi.hoisted(() => {
         return { versions: state.versions, shown: shownId === null ? null : { id: shownId, content: state.contents[shownId] ?? "" } };
       },
     },
-    navigate: {
-      openThreadPanel: (options: unknown) => {
+    panel: {
+      openTab: (options: unknown) => {
         state.opened.push(options);
         return state.accepts;
       },
@@ -51,7 +51,8 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => {
     ...(await importOriginal<typeof PluginSdkApp>()),
     useComposers: () => bb.state.composers,
     useSdk: () => ({}),
-    useBbNavigate: () => bb.navigate,
+    experimental_useAppPanel: () => bb.panel,
+    useBbNavigate: () => ({}),
     useRpc: () => bb.rpc,
     useSettings: () => ({ values: { animations: true }, isLoading: false }),
     useRealtime: (_channel: string, handler: (payload: unknown) => void) => {
@@ -67,6 +68,8 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => {
 vi.mock("./useSuperseded", () => ({ useSuperseded: () => null, useReplyIndex: () => null }));
 
 const THREAD = "thr_board";
+/** The open the opener asks bb's side panel for. */
+const BOARD_OPEN = { tab: { id: "board", context: { kind: "thread" }, availability: "action" } };
 const report = (line: string): string => [`Bottom line: ${line}.`, "", "```ui", `Card("Status", [Text("${line} block")])`, "```"].join("\n");
 const version = (id: string, board: string, title: string, at: number): BoardVersion => ({ id, board, title, at });
 const button = (label: string): HTMLButtonElement | undefined => [...container.querySelectorAll("button")].find((candidate) => candidate.textContent === label);
@@ -111,12 +114,12 @@ async function settle(): Promise<void> {
 }
 
 async function renderTab(): Promise<void> {
-  act(() => root.render(<BoardTab threadId={THREAD} params={null} />));
+  act(() => root.render(<BoardTab threadId={THREAD} environment={null} params={null} />));
   await settle();
 }
 
 async function renderOpener(threadId = THREAD): Promise<void> {
-  act(() => root.render(<BoardOpener threadId={threadId} projectId="proj" isCompactViewport={false} />));
+  act(() => root.render(<BoardOpener threadId={threadId} projectId="proj" environment={null} />));
   await settle();
 }
 
@@ -310,7 +313,7 @@ describe("opening the tab by itself", () => {
   it("opens for a version found when the thread is opened, once", async () => {
     bb.state.versions = [version("a", "a", "Launch", 1_000)];
     await renderOpener();
-    expect(bb.state.opened).toEqual([{ actionId: "board" }]);
+    expect(bb.state.opened).toEqual([BOARD_OPEN]);
     act(() => root.unmount());
     root = createRoot(container);
     await renderOpener();
@@ -327,7 +330,7 @@ describe("opening the tab by itself", () => {
     act(() => bb.publish({ threadId: "thr_other", id: "x" }));
     expect(bb.state.opened).toEqual([]);
     act(() => bb.publish({ threadId: THREAD, id: "b" }));
-    expect(bb.state.opened).toEqual([{ actionId: "board" }]);
+    expect(bb.state.opened).toEqual([BOARD_OPEN]);
     // The same version announced again opens nothing more.
     act(() => bb.publish({ threadId: THREAD, id: "b" }));
     expect(bb.state.opened).toHaveLength(1);

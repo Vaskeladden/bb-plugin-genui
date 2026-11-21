@@ -20,6 +20,7 @@ import {
   type EnvironmentThread,
 } from "../core/environments";
 import { RUNNING, THREAD_ID, type EnvironmentsResult, type ProjectFailure, type ThreadDisplayStatus } from "../core/project";
+import { readWorkspaceStatus } from "./git";
 import { pullRequestInfo, readPullRequest } from "./source";
 
 type Sdk = BbPluginApi["sdk"];
@@ -65,7 +66,7 @@ export interface ThreadEntry {
   readonly updatedAt: number;
 }
 
-/** The fields of environments.status's available workspace Environments reads. */
+/** The fields of the Git plugin's available workspace Environments reads. */
 export interface WorkspaceEntry {
   readonly branch: { readonly defaultBranch: string };
   readonly checkout:
@@ -82,7 +83,7 @@ export interface WorkspaceEntry {
   };
 }
 
-/** environments.status when it couldn't read the checkout. */
+/** The Git plugin's status when it couldn't read the checkout. */
 export type UnreadStatus =
   | { readonly outcome: "not_applicable"; readonly message: string }
   | { readonly outcome: "unavailable"; readonly failure: { readonly code: string; readonly message: string; readonly workspacePath: string } };
@@ -245,7 +246,7 @@ export function checkoutFailure(answer: UnreadStatus): CheckoutFailure {
   }
 }
 
-/** environments.status as Environments shows it, measured against `base`. */
+/** The Git plugin's status as Environments shows it, measured against `base`. */
 export function checkoutStatus(workspace: WorkspaceEntry, base: string): CheckoutStatus {
   const checkout = workspace.checkout;
   const branch = checkout.kind === "branch" ? checkout.branchName : checkout.kind === "unborn" ? checkout.branchName : null;
@@ -308,11 +309,11 @@ export function createEnvironmentsSource(sdk: Sdk): EnvironmentsSource {
     if (!environment.isGitRepo) return { checkout: unread("not-git", "Not a git checkout"), pull: null };
     const environmentId = environment.id;
     let base = environment.mergeBaseBranch ?? environment.defaultBranch;
-    let status = await sdk.environments.status({ environmentId, ...(base === null ? {} : { mergeBaseBranch: base }) });
+    let status = await readWorkspaceStatus(sdk, { environmentId, ...(base === null ? {} : { mergeBaseBranch: base }) });
     if (status.outcome !== "available") return { checkout: checkoutFailure(status), pull: null };
     if (base === null) {
       base = status.workspace.branch.defaultBranch;
-      status = await sdk.environments.status({ environmentId, mergeBaseBranch: base });
+      status = await readWorkspaceStatus(sdk, { environmentId, mergeBaseBranch: base });
       if (status.outcome !== "available") return { checkout: checkoutFailure(status), pull: null };
     }
     const checkout = checkoutStatus(status.workspace, base);

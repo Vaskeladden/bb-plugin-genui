@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { EnvironmentDetail } from "../core/environments";
+import type { GitWorkspace } from "./git";
 import {
   checkoutFailure,
   checkoutStatus,
@@ -10,7 +11,6 @@ import {
   mapLimit,
   type EnvironmentEntry,
   type ThreadEntry,
-  type WorkspaceEntry,
 } from "./environments";
 
 /** BB's environment record as `bb environment list --json` prints it, trimmed to what Environments reads. */
@@ -59,12 +59,12 @@ function thread(id: string, environmentId: string | null, overrides: Partial<Thr
   };
 }
 
-/** environments.status for a clean branch 2 ahead and 1 behind its base, with uncommitted work. */
-function workspace(branch: string, overrides: Partial<WorkspaceEntry> = {}): WorkspaceEntry {
+/** The Git plugin's status for a clean branch 2 ahead and 1 behind its base, with uncommitted work. */
+function workspace(branch: string, overrides: Partial<GitWorkspace> = {}): GitWorkspace {
   return {
     branch: { defaultBranch: "main" },
     checkout: { kind: "branch", branchName: branch, headSha: "82af8f087df1cb963097461359446d9a69b36dc9" },
-    mergeBase: { aheadCount: 2, behindCount: 1 },
+    mergeBase: { aheadCount: 2, behindCount: 1, commits: [] },
     workingTree: { files: [{}, {}], insertions: 12, deletions: 3, lineStatsComplete: true },
     ...overrides,
   };
@@ -134,17 +134,21 @@ function fakeBb(options: { status?: (environmentId: string, base: string | undef
         if (found === undefined) throw new Error("404");
         return found;
       },
-      status: async (args: { environmentId: string; mergeBaseBranch?: string }) => {
-        calls.push({ method: "environments.status", args });
-        const custom = options.status?.(args.environmentId, args.mergeBaseBranch);
-        if (custom !== undefined) return custom;
-        const branch = environments[args.environmentId]?.branchName ?? "main";
-        return { outcome: "available", workspace: workspace(branch) };
-      },
     },
     plugins: {
-      callRpc: async (args: { pluginId: string; method: string; input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) => {
+      callRpc: async (args: {
+        pluginId: string;
+        method: string;
+        input: { keys: string[]; environmentId: string; mergeBaseBranch?: string };
+        outputSchema: { parse: (value: unknown) => unknown };
+      }) => {
         calls.push({ method: `${args.pluginId}.${args.method}`, args: args.input });
+        if (args.pluginId === "bb--git") {
+          const { environmentId, mergeBaseBranch } = args.input;
+          const custom = options.status?.(environmentId, mergeBaseBranch);
+          const branch = environments[environmentId]?.branchName ?? "main";
+          return args.outputSchema.parse(custom ?? { outcome: "available", workspace: workspace(branch) });
+        }
         return args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "available", pullRequest: PULL_REQUEST }])));
       },
     },
@@ -230,7 +234,7 @@ describe("environments: one environment's detail", () => {
     expect(await source.environment("thr_mine00", "env_nope")).toMatchObject({ ok: false, reason: "not-found" });
     expect(await source.environment("thr_mine00", "x")).toMatchObject({ ok: false, reason: "invalid" });
     expect(await source.environment("thr_nobody", "env_wt01")).toMatchObject({ ok: false, reason: "not-found" });
-    expect(calls.some((call) => call.method === "environments.status")).toBe(false);
+    expect(calls.some((call) => call.method === "bb--git.workspaceStatus")).toBe(false);
   });
 
   it("reads a worktree's status against its base and its pull request", async () => {
@@ -249,7 +253,7 @@ describe("environments: one environment's detail", () => {
       uncommitted: { files: 2, additions: 12, deletions: 3, complete: true },
     });
     expect(detail.pull).toMatchObject({ ok: true, pullRequest: { number: 424, state: "draft", checks: { state: "failing", failed: 1, passed: 3 } } });
-    expect(calls.find((call) => call.method === "environments.status")?.args).toEqual({ environmentId: "env_wt01", mergeBaseBranch: "main" });
+    expect(calls.find((call) => call.method === "bb--git.workspaceStatus")?.args).toEqual({ environmentId: "env_wt01", mergeBaseBranch: "main" });
   });
 
   it("doesn't look for a pull request on the default branch", async () => {
@@ -276,7 +280,7 @@ describe("environments: one environment's detail", () => {
     const { source, calls } = fakeBb();
     const detail = (await source.environment("thr_mine00", "env_gone")) as EnvironmentDetail;
     expect(detail.checkout).toMatchObject({ ok: false, reason: "gone" });
-    expect(calls.some((call) => call.method === "environments.status")).toBe(false);
+    expect(calls.some((call) => call.method === "bb--git.workspaceStatus")).toBe(false);
   });
 
   it("asks again with the default branch when BB has none recorded", async () => {
@@ -295,14 +299,15 @@ function fakeBbWithoutBase() {
     threads: { get: async () => thread("thr_mine00", "env_main") },
     environments: {
       get: async () => environment("env_wt01", { defaultBranch: null }),
-      status: async (args: unknown) => {
-        calls.push({ method: "environments.status", args });
-        return { outcome: "available", workspace: workspace("wt/env_wt01") };
-      },
     },
     plugins: {
-      callRpc: async (args: { input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) =>
-        args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "absent" }]))),
+      callRpc: async (args: { pluginId: string; input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) => {
+        if (args.pluginId === "bb--git") {
+          calls.push({ method: "bb--git.workspaceStatus", args: args.input });
+          return args.outputSchema.parse({ outcome: "available", workspace: workspace("wt/env_wt01") });
+        }
+        return args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "absent" }])));
+      },
     },
   };
   return { source: createEnvironmentsSource(sdk as unknown as BbPluginApi["sdk"]), calls };

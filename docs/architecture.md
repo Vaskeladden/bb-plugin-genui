@@ -76,8 +76,8 @@ The internals behind [the README](../README.md): how agents learn the language, 
    - `ui_examples` is optional: it returns the gallery examples of the
      components named (`examples.ts`), with their data files; "app"
      returns the app guide.
-3. Rendering depends on the BB version:
-   - With BB's merged `experimental_codeFenceRenderer` slot (#5387), BB
+3. Rendering goes through BB's code-fence renderer slot:
+   - Through `experimental_codeFenceRenderer` (#5387), BB
      hands each fence to `ui/SlotFence.tsx` with `code`, `language`,
      `status: "streaming" | "closed" | "unclosed"`, a per-language index
      and its message identity. Closed means the delimiter arrived; unclosed
@@ -86,20 +86,12 @@ The internals behind [the README](../README.md): how agents learn the language, 
      BB keeps the renderer instance through streaming, closure and reply
      completion. Missing, disabled, conflicting or crashing renderers fall
      back to BB's code block; a crash is retried when code or status changes.
-     The props are the SDK's `ExperimentalCodeFenceRendererProps` (0.6.54);
-     `app.tsx` checks the method exists at runtime, since BB 0.45 lacks it.
-   - On a BB without that slot, an app overlay (`ui/FenceOverlay.tsx`) finds
-     the code blocks in BB's DOM, hides them and portals the same `Fence`
-     there. It treats a block as complete after 1.5 seconds without a text
-     change, so a paused or interrupted app can execute on this legacy path.
-     Each mount carries `data-bb-plugin`, so BB's scoped plugin
-     CSS applies.
+     The props are the SDK's `ExperimentalCodeFenceRendererProps`. The
+     plugin requires a BB with the slot (`engines` in `package.json`); the
+     DOM overlay that served older BB is gone.
    - BB's timeline unmounts rows that scroll out of view and remounts them
      on the way back, so a block must open at its final height or the
-     conversation moves under the reader. The overlay renders a block it
-     finds in the same task as BB's DOM change, before the browser paints
-     (`flushSync` in its MutationObserver; streaming text is batched every
-     60 ms). A remounted block reuses what it had: files and its images
+     conversation moves under the reader. A remounted block reuses what it had: files and its images
      already read in this page (`useLoadedData`), its settled state, an
      app's last height, a diagram's last drawn height at that width (kept in
      `localStorage`), and no replayed entrance. A diagram holds that height
@@ -127,11 +119,10 @@ The internals behind [the README](../README.md): how agents learn the language, 
      outline is read again (`ui/useSuperseded.ts`); until the outline says,
      the block remembers no height. Height glides (`useSmoothHeight`) only
      follow the user's own input; anything else snaps. `scripts/scroll-jitter.mjs`
-     measures it. Both paths mark mounts with `data-genui-fence` and
-     `data-genui-renderer="slot" | "overlay"`; the script reports mount
-     counts and hidden code blocks as well as drift. Only the overlay adds
-     `data-genui-hidden`. Persistent keys remain
-     `bb.genui.state:${message.id}#${language}#${index}` on either path.
+     measures it. Mounts are marked with `data-genui-fence` and
+     `data-genui-renderer="slot"`; the script reports mount
+     counts and hidden code blocks as well as drift. Persistent keys are
+     `bb.genui.state:${message.id}#${language}#${index}`.
 4. ```ui specs render while the reply streams: `compileStreaming` renders
    the longest prefix that compiles, cutting after each finished string
    too, so `Metric("Total", "$"` shows while `+ price` is still coming. A
@@ -153,9 +144,8 @@ The internals behind [the README](../README.md): how agents learn the language, 
    transition and animation; the system setting reaches CSS only through
    `motion-reduce:` variants. The page reads the setting with `useSettings`,
    live, and keeps it in `localStorage`, since BB answers after a fresh
-   page's first blocks have mounted. On the slot path,
-   ```app blocks run only after the closing delimiter; the overlay uses the
-   settlement heuristic above. Until then a preview frame
+   page's first blocks have mounted.
+   ```app blocks run only after the closing delimiter. Until then a preview frame
    (`sandbox="allow-scripts"`) draws the markup written so far:
    `core/partialHtml.ts` drops an unfinished tag or entity and every
    `<script>` and keeps complete `<style>` blocks, the host posts the result
@@ -589,7 +579,6 @@ pilot stored.
 - `ui/`:
   - `Fence.tsx`: the shared renderer.
   - `SlotFence.tsx`: the native renderer slot, including terminal status policy.
-  - `FenceOverlay.tsx`: the older-BB DOM fallback and settlement heuristic.
   - `AppBlock.tsx`: the sandboxed apps (preview, frame, toolbar);
     `appDocument.ts` their documents and bootstrap; `appBridge.ts` what a
     frame may post, and app storage in the host.
@@ -610,8 +599,9 @@ pilot stored.
     the version list under `board:<thread>`, each version's text under
     `board:<thread>:<version>`. `show_board` and `bb genui show-board` check
     every block and publish; a publish is announced on the `board` realtime
-    channel. `ui/BoardTab.tsx` is the side-panel tab (a `threadPanelAction`)
-    and the opener mounted with every visible thread, which opens the tab for
+    channel. `ui/BoardTab.tsx` is the side-panel tab (an action
+    `experimental_tab` of the thread) and the opener mounted with every
+    visible thread (an `experimental_threadHeaderRow` that renders nothing), which opens the tab for
     a version this browser has not opened it for. A board's blocks are the
     same `Fence` a reply's are, under the message id `board:<version>`, which
     BB's outline never lists, so they never count as answered.

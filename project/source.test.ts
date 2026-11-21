@@ -7,7 +7,7 @@ import { createProjectSource, diffQuery, outcomeFailure } from "./source";
 type Fake = Record<string, Record<string, (args: never) => unknown>>;
 
 /** A BB with one project's threads and one checkout; only what source.ts calls. */
-function fakeBb(overrides: Fake = {}) {
+function fakeBb(overrides: Fake = {}, git: { unreadPatch?: object } = {}) {
   const calls: { method: string; args: unknown }[] = [];
   const kv = new Map<string, unknown>();
   const threads: Record<string, object> = {
@@ -82,38 +82,48 @@ function fakeBb(overrides: Fake = {}) {
     providers: { list: async () => [{ id: "claude-code", displayName: "Claude Code", logoUrl: null }] },
     environments: {
       get: async () => ({ isGitRepo: true, mergeBaseBranch: null, defaultBranch: "main", branchName: "feat" }),
-      status: async (args: unknown) => {
-        calls.push({ method: "status", args });
-        return {
-          outcome: "available",
-          workspace: {
-            branch: { currentBranch: "feat", defaultBranch: "main" },
-            checkout: { kind: "branch", branchName: "feat", headSha: "f".repeat(40) },
-            mergeBase: { aheadCount: 1, behindCount: 2, commits: [{ sha: "abc1234def", shortSha: "abc1234", subject: "Fix", authorName: "Ana", authoredAt: 5 }] },
-          },
-        };
-      },
-      diffFiles: async (args: unknown) => {
-        calls.push({ method: "diffFiles", args });
-        // Each read sees a newer state, so a kept snapshot is told apart from a fresh read.
-        now += 1;
-        return {
-          outcome: "available",
-          files: files.map((file) => ({ ...file, additions: file.additions * now })),
-          initialPatches: [{ path: "src/a.ts", patch: "@@ -1 +1 @@\n-a\n+b", truncated: false }],
-          truncated: false,
-          mergeBaseRef: "m",
-          shortstat: "",
-        };
-      },
-      diffPatch: async (args: { paths: string[] }) => {
-        calls.push({ method: "diffPatch", args });
-        return { outcome: "available", patches: args.paths.map((path) => ({ path, patch: `@@ ${path}`, truncated: false })) };
-      },
     },
     plugins: {
-      callRpc: async (args: { input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) =>
-        args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "absent" }]))),
+      // bb's Git plugin answers the git reads; its pull request plugin has none for this checkout.
+      callRpc: async (args: { pluginId: string; method: string; input: { keys: string[] }; outputSchema: { parse: (value: unknown) => unknown } }) => {
+        if (args.pluginId !== "bb--git") return args.outputSchema.parse(Object.fromEntries(args.input.keys.map((key) => [key, { outcome: "absent" }])));
+        calls.push({ method: args.method, args: args.input });
+        switch (args.method) {
+          case "workspaceStatus":
+            return args.outputSchema.parse({
+              outcome: "available",
+              workspace: {
+                branch: { currentBranch: "feat", defaultBranch: "main" },
+                checkout: { kind: "branch", branchName: "feat", headSha: "f".repeat(40) },
+                mergeBase: { aheadCount: 1, behindCount: 2, commits: [{ sha: "abc1234def", shortSha: "abc1234", subject: "Fix", authorName: "Ana", authoredAt: 5 }] },
+                workingTree: { files: [], insertions: 0, deletions: 0, lineStatsComplete: true },
+              },
+            });
+          case "files":
+            // Each read sees a newer state, so a kept snapshot is told apart from a fresh read.
+            now += 1;
+            return args.outputSchema.parse({
+              outcome: "available",
+              files: files.map((file) => ({ ...file, additions: file.additions * now, revision: `rev${now}:${file.path}` })),
+              initialPatches: [{ path: "src/a.ts", patch: "@@ -1 +1 @@\n-a\n+b", truncated: false }],
+              truncated: false,
+              mergeBaseRef: "m",
+              shortstat: "",
+            });
+          case "patches":
+            // A key is the Git plugin's [environment, target, ignoreWhitespace, path, revision].
+            return args.outputSchema.parse(
+              Object.fromEntries(
+                args.input.keys.map((key) => {
+                  const path = (JSON.parse(key) as unknown[])[3] as string;
+                  return [key, git.unreadPatch ?? { outcome: "available", patch: { path, patch: `@@ ${path}`, truncated: false } }];
+                }),
+              ),
+            );
+          default:
+            throw new Error(`unexpected Git plugin method ${args.method}`);
+        }
+      },
     },
     ...overrides,
   };
@@ -144,7 +154,11 @@ describe("Changes", () => {
   it("compares the branch with the default branch, all changes included", async () => {
     const { source, calls } = fakeBb();
     const view = await source.changes("thr_mine00", { kind: "branch" }, null, null);
-    expect(calls.find((call) => call.method === "diffFiles")?.args).toMatchObject({ target: "all", mergeBaseBranch: "main" });
+    expect(calls.find((call) => call.method === "files")?.args).toEqual({
+      environmentId: "env_a",
+      target: { type: "all", mergeBaseBranch: "main" },
+      ignoreWhitespace: false,
+    });
     expect(view).toMatchObject({ ok: true, scope: { kind: "branch", branch: "feat", base: "main", onBase: false }, stored: false });
     if (!view.ok) return;
     expect(view.files.map((file) => [file.path, file.diff])).toEqual([
@@ -168,7 +182,7 @@ describe("Changes", () => {
     expect(again).toEqual(first);
     expect(first.ok && first.patches.map((patch) => patch.path)).toEqual(["src/a.ts", "src/b.ts"]);
     expect(first.ok && first.livePatches).toBe(false);
-    expect(calls.filter((call) => call.method === "diffFiles")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "files")).toHaveLength(1);
     const refreshed = await source.changes("thr_mine00", { kind: "uncommitted" }, null, { ...keep, refresh: true });
     expect(refreshed.ok && refreshed.files[0]!.additions).not.toBe(first.ok && first.files[0]!.additions);
     // The refresh replaced what later renders show.
@@ -196,7 +210,21 @@ describe("Changes", () => {
     for (const path of ["/etc/passwd", "src/../../x", ""]) {
       expect(await source.patches("thr_mine00", { kind: "branch" }, [path])).toMatchObject({ ok: false, reason: "invalid" });
     }
-    expect(calls.some((call) => call.method === "diffPatch")).toBe(false);
+    expect(calls.some((call) => call.method === "patches")).toBe(false);
+  });
+
+  it("asks for a patch by the file's revision in the current list, and leaves out a path that isn't a changed file", async () => {
+    const { source, calls } = fakeBb();
+    const answer = await source.patches("thr_mine00", { kind: "uncommitted" }, ["src/b.ts", "not/changed.ts"]);
+    expect(answer).toEqual({ ok: true, patches: [{ path: "src/b.ts", patch: "@@ src/b.ts", truncated: false }] });
+    expect(calls.find((call) => call.method === "patches")?.args).toEqual({
+      keys: [JSON.stringify(["env_a", { type: "uncommitted" }, false, "src/b.ts", "rev2:src/b.ts"])],
+    });
+  });
+
+  it("says so when BB can't read the patch", async () => {
+    const { source } = fakeBb({}, { unreadPatch: { outcome: "unavailable", failure: { code: "unknown", message: "git timed out", workspacePath: "/work/a" } } });
+    expect(await source.patches("thr_mine00", { kind: "uncommitted" }, ["src/b.ts"])).toEqual({ ok: false, reason: "unavailable", message: "git timed out" });
   });
 });
 

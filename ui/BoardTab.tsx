@@ -2,8 +2,9 @@
 // agent published with show_board (board-store.ts), rendered as a reply would
 // be: prose as markdown, each ```ui and ```app block live. Every version stays
 // in the picker, so a board is a point in time the user can go back to.
-// BoardOpener, mounted with every visible thread, opens the tab when a version
-// the user hasn't seen is published.
+// BoardOpener, mounted with every visible thread (a thread header row that
+// takes no space), opens the tab when a version the user hasn't seen is
+// published.
 //
 // The board is where the user goes on with the work, not only where they read
 // it: Update and New board ask the agent for a fresh report, and what the user
@@ -12,13 +13,14 @@
 // leaving the side panel.
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import {
+  experimental_useAppPanel,
   Markdown,
-  useBbNavigate,
   useComposers,
   useRealtime,
   useRpc,
-  type PluginThreadHeaderActionProps,
-  type PluginThreadPanelProps,
+  type ExperimentalTabReference,
+  type ExperimentalThreadActionTabProps,
+  type ExperimentalThreadHeaderRowProps,
 } from "@get-bb/plugin-sdk/app";
 import { cn } from "@/lib/utils";
 import { BOARD_CHANNEL } from "../board-channel";
@@ -29,8 +31,11 @@ import { Fence, useThreadActions } from "./Fence";
 import { flushAnswers, sheetFor } from "./answerSheet";
 import { useMotionScope } from "./components/motion";
 
-/** The `threadPanelAction` id the tab is registered under. */
-export const BOARD_ACTION = "board";
+/**
+ * The tab as registered and as opened: an action tab of a thread's side panel.
+ * The id is the one the tab had under bb's earlier panel-action slot, so tabs bb saved keep theirs.
+ */
+export const BOARD_TAB = { id: "board", context: { kind: "thread" }, availability: "action" } as const satisfies ExperimentalTabReference;
 export const BOARD_TITLE = "Status board";
 
 /** How often the header's age is refreshed. */
@@ -67,7 +72,7 @@ function useNow(): number {
   return now;
 }
 
-export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
+export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactElement {
   const rpc = useRpc<typeof rpcContract>();
   const motion = useMotionScope();
   const now = useNow();
@@ -323,15 +328,16 @@ function markSeen(threadId: string, id: string): void {
  * opened it for: one published while the thread is on screen, or found when
  * the thread is opened. Renders nothing.
  */
-export function BoardOpener({ threadId }: PluginThreadHeaderActionProps): null {
+export function BoardOpener({ threadId }: ExperimentalThreadHeaderRowProps): null {
   const rpc = useRpc<typeof rpcContract>();
-  const navigate = useBbNavigate();
+  // The side panel of the thread this row is mounted in.
+  const panel = experimental_useAppPanel();
   const open = useCallback(
     (id: string) => {
       if (lastSeen(threadId) === id) return;
-      if (navigate.openThreadPanel({ actionId: BOARD_ACTION })) markSeen(threadId, id);
+      if (panel.openTab({ tab: BOARD_TAB })) markSeen(threadId, id);
     },
-    [navigate, threadId],
+    [panel, threadId],
   );
 
   useRealtime(BOARD_CHANNEL, (payload) => {
