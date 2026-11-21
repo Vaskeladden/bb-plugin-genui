@@ -265,7 +265,10 @@ describe("going on with the work from the board", () => {
 
     await act(async () => button("Ship it")?.click());
     await settle();
-    expect(composer.draft.text).toContain("Ship it");
+    // The answer says which board version it was picked on: the chat may have moved on since.
+    const [origin, answer] = composer.draft.text.split("\n");
+    expect(origin).toMatch(/^From the status board «Launch», version 1 of .+ \(`bb genui board --version a` prints it\):$/);
+    expect(answer).toBe("Ship it");
     expect(container.querySelector("footer")?.textContent).toContain("1 answer ready");
 
     // BB refuses the send: the bar says why and the answer stays.
@@ -279,8 +282,27 @@ describe("going on with the work from the board", () => {
     await act(async () => button("Send to chat")?.click());
     await settle();
     expect(composer.sent).toHaveLength(1);
-    expect(composer.sent[0]).toContain("Ship it");
+    expect(composer.sent[0]).toMatch(/^From the status board «Launch», version 1 of .+:\nShip it$/);
     expect(container.querySelector("footer")).toBeNull();
+  });
+
+  it("names the earlier version when the answer is picked there", async () => {
+    const composer = fakeComposer(THREAD);
+    bb.state.composers = [composer];
+    // Its own version ids: the thread's answer sheet outlives a test, and the one above sent from version «a».
+    bb.state.versions = [version("old", "old", "Launch", 1_000), version("new", "old", "Launch", 2_000)];
+    const ask = ["What next?", "", "```ui", 'Card("Next", [Button("Ship it"), Button("Wait")])', "```"].join("\n");
+    bb.state.contents = { old: ask, new: ask };
+    await renderTab();
+    const select = container.querySelector("select");
+    await act(async () => {
+      select!.value = "old";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    await act(async () => button("Wait")?.click());
+    await settle();
+    expect(composer.draft.text).toMatch(/^From the status board «Launch», version 1 of .+, not the newest \(version 2 is\) \(`bb genui board --version old` prints it\):\nWait$/);
   });
 });
 

@@ -47,6 +47,8 @@ export type AnswerTarget =
       readonly fence: number;
       /** The message's index in the thread, once known (reply order of the answers). */
       readonly reply: number | null;
+      /** For a block outside the chat (a status board): the line that says where its answers come from (core/answers.ts). */
+      readonly origin?: string;
       send(text: string): Promise<void>;
     }
   | { readonly kind: "gallery" };
@@ -298,7 +300,7 @@ export function useBlockAnswerTarget(
       if (mode === "direct" && target.kind === "thread") {
         // No composer for the thread: the pick is the user's message, as before answers were staged.
         try {
-          await target.send(answer.text);
+          await target.send(target.origin === undefined ? answer.text : `${target.origin}\n${answer.text}`);
           sheet.markSent(stateKey, question, answer.text);
         } catch (cause) {
           toast.error(cause instanceof Error ? cause.message : String(cause));
@@ -314,6 +316,7 @@ export function useBlockAnswerTarget(
         position: position(question),
         text: answer.text,
         selection: answer.selection,
+        origin: target.kind === "thread" ? (target.origin ?? null) : null,
       });
     },
     [sheet, stateKey, mode, target, position],

@@ -45,6 +45,39 @@ function typeAt(start: string, at: number, typed: string, block: WrittenBlock): 
 
 const written = (text: string, from: number): WrittenBlock => ({ text, from, to: from + text.length });
 
+describe("answers from outside the chat", () => {
+  const origin = "From the status board «Launch», version 2 of 21 Nov 14:11 (`bb genui board --version b` prints it):";
+
+  it("writes a source's line once, above its answers", () => {
+    const entries = [
+      entry("Do step 1", { message: "board:b", origin, seq: 0 }),
+      entry("shipit", { message: "board:b", origin, fence: 1, seq: 1 }),
+    ];
+    expect(answersText(entries)).toBe(`${origin}\nDo step 1\nshipit`);
+  });
+
+  it("puts answers to replies first, so the source's line never stands over them", () => {
+    const entries = [
+      entry("Do step 1", { message: "board:b", origin, seq: 0 }),
+      entry("Pro", { message: "m1", reply: 3, seq: 1 }),
+    ];
+    expect(answersText(entries)).toBe(`Pro\n${origin}\nDo step 1`);
+  });
+
+  it("keeps two sources apart, each under its own line", () => {
+    const earlier = "From the status board «Launch», version 1 of 21 Nov 13:00, not the newest (version 2 is) (`bb genui board --version a` prints it):";
+    const entries = [
+      entry("Wait", { message: "board:a", origin: earlier, seq: 0 }),
+      entry("Do step 1", { message: "board:b", origin, seq: 1 }),
+    ];
+    expect(answersText(entries)).toBe(`${earlier}\nWait\n${origin}\nDo step 1`);
+  });
+
+  it("has no block when the source's answers are empty", () => {
+    expect(answersText([entry(" ", { message: "board:b", origin })])).toBeNull();
+  });
+});
+
 describe("writing the answers block", () => {
   it("appends the first block as its own paragraph after what the user wrote, leaving their mentions", () => {
     const draft = { text: "Thanks, @Sam", mentions: [mention(8, 12, "@Sam")] };

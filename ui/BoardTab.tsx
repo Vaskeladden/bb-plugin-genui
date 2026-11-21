@@ -22,7 +22,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { cn } from "@/lib/utils";
 import { BOARD_CHANNEL } from "../board-channel";
-import { boardSegments, boardSignal, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
+import { boardOrigin, boardSegments, boardSignal, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
 import { relativeTime } from "../core/project";
 import type { rpcContract } from "../server";
 import { Fence, useThreadActions } from "./Fence";
@@ -117,7 +117,10 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
   const newest = board?.versions.at(-1);
 
   let body: ReactNode;
-  if (shown !== null && version !== undefined) body = <BoardBody key={shown.id} threadId={threadId} id={shown.id} content={shown.content} />;
+  if (shown !== null && version !== undefined && board !== null) {
+    const origin = boardOrigin(board.versions, shown.id, TIME.format(version.at)) ?? undefined;
+    body = <BoardBody key={shown.id} threadId={threadId} id={shown.id} content={shown.content} origin={origin} />;
+  }
   else if (load.status === "loading") body = <Notice>Loading the board…</Notice>;
   else if (load.status === "failed") body = <Notice>Couldn&apos;t read the board: {load.message}</Notice>;
   else
@@ -260,8 +263,11 @@ function BoardAnswers({ threadId }: { threadId: string }): ReactElement | null {
   );
 }
 
-/** One version, as the reply it would have been. */
-function BoardBody({ threadId, id, content }: { threadId: string; id: string; content: string }): ReactElement {
+/**
+ * One version, as the reply it would have been. `origin` goes above what the
+ * user answers here, so the agent knows which version the answer was given on.
+ */
+function BoardBody({ threadId, id, content, origin }: { threadId: string; id: string; content: string; origin: string | undefined }): ReactElement {
   const actions = useThreadActions();
   const segments = useMemo(() => boardSegments(content), [content]);
   return (
@@ -281,6 +287,7 @@ function BoardBody({ threadId, id, content }: { threadId: string; id: string; co
               messageId={`board:${id}`}
               fence={segment.index}
               actions={actions}
+              origin={origin}
             />
           </div>
         ),

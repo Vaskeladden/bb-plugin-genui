@@ -36,7 +36,7 @@ import {
 } from "./data-source";
 import { checkApp, MAX_APP_CHARS } from "./core/appLint";
 import { checkSpec, renderReplyMarkdown } from "./fallback";
-import { boardSegments, MAX_BOARD_CHARS, MAX_BOARD_TITLE_CHARS, versionNumber, type BoardMode, type BoardVersion } from "./core/board";
+import { boardSegments, MAX_BOARD_CHARS, MAX_BOARD_TITLE_CHARS, MAX_BOARD_VERSIONS, versionNumber, type BoardMode, type BoardVersion } from "./core/board";
 import { createBoardStore } from "./board-store";
 import type { Value } from "./core/types";
 import {
@@ -342,7 +342,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "show_board",
     description:
-      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it only when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there.",
+      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it only when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on. When the work has moved on since that version, print it (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
     parameters: z.object({
       content: z.string().min(1).max(MAX_BOARD_CHARS).describe("The board: markdown with ```ui and ```app blocks, as a reply would hold them"),
       title: z.string().min(1).max(MAX_BOARD_TITLE_CHARS).optional().describe("A few words naming the board; omitted, an update keeps the board's title"),
@@ -494,7 +494,11 @@ export default async function plugin(bb: BbPluginApi) {
         }),
         board: cliCommand({
           summary: "Print a thread's status board as it was published: markdown with its ui and app blocks",
-          description: "Read it before you update the board, so the next version keeps its rows and order.",
+          description:
+            "Read it before you update the board, so the next version keeps its rows and order. An answer the user sends from the board names the version it was picked on: print that one with --version.",
+          options: {
+            version: { type: "string", description: "The id of an earlier version, as an answer from the board names it; omitted, the newest" },
+          },
           positionals: [{ name: "thread", description: "Thread ID; defaults to the thread running the command" }],
           async run(input, ctx) {
             const threadId = input.positionals.thread ?? ctx.threadId;
@@ -506,12 +510,21 @@ export default async function plugin(bb: BbPluginApi) {
             }
             const versions = await boards.versions(threadId);
             const newest = versions.at(-1);
-            const content = newest === undefined ? null : await boards.content(threadId, newest.id);
-            if (newest === undefined || content === null) {
-              throw new PluginCliError(`thread ${threadId} has no status board yet`, { code: "no_board" });
+            if (newest === undefined) throw new PluginCliError(`thread ${threadId} has no status board yet`, { code: "no_board" });
+            const asked = input.options.version;
+            const shown = asked === undefined ? newest : versions.find((candidate) => candidate.id === asked);
+            const content = shown === undefined ? null : await boards.content(threadId, shown.id);
+            if (shown === undefined || content === null) {
+              throw new PluginCliError(`thread ${threadId} has no board version ${asked ?? newest.id}`, {
+                code: "no_version",
+                hint: `The history keeps the newest ${MAX_BOARD_VERSIONS} versions. The newest is ${newest.id}: bb genui board`,
+              });
             }
-            const header = `«${newest.title}», version ${versionNumber(versions, newest.id)}, published ${new Date(newest.at).toISOString()}`;
-            return { exitCode: 0, stdout: `${header}\n\n${content}\n` };
+            const describe = (version: BoardVersion): string =>
+              `«${version.title}», version ${versionNumber(versions, version.id)}, published ${new Date(version.at).toISOString()}`;
+            // An earlier version says so, and what replaced it: the work may have moved on since.
+            const later = shown.id === newest.id ? "" : `\nNot the newest: ${describe(newest)} (bb genui board) came after it.`;
+            return { exitCode: 0, stdout: `${describe(shown)}${later}\n\n${content}\n` };
           },
         }),
         "show-board": cliCommand({

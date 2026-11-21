@@ -82,6 +82,22 @@ export function boardSegments(content: string): BoardSegment[] {
   return segments;
 }
 
+/**
+ * The line above answers picked on a board version, in the user's message:
+ * which board and version they answer, since the chat they land in may have
+ * moved on after it was published, and the command that prints that version.
+ * `published` is the version's time as the user reads it; null when `id` is
+ * not one of `versions`.
+ */
+export function boardOrigin(versions: readonly BoardVersion[], id: string, published: string): string | null {
+  const version = versions.find((candidate) => candidate.id === id);
+  const number = versionNumber(versions, id);
+  const newest = versions.at(-1);
+  if (version === undefined || number === null || newest === undefined) return null;
+  const newer = newest.id === id ? "" : newest.board === version.board ? `, not the newest (version ${versionNumber(versions, newest.id)} is)` : ", an earlier board";
+  return `From the status board «${version.title}», version ${number} of ${published}${newer} (\`bb genui board --version ${id}\` prints it):`;
+}
+
 /** What a publish announces on the realtime channel; null for anything else on it. */
 export function boardSignal(payload: unknown): { readonly threadId: string; readonly id: string } | null {
   if (typeof payload !== "object" || payload === null) return null;

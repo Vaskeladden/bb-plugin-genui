@@ -88,6 +88,17 @@ describe("the status board", () => {
     expect(cli.exitCode).toBe(0);
     expect(cli.stdout).toContain("«Launch», version 2");
     expect(cli.stdout).toContain(report("second"));
+    expect(cli.stdout).not.toContain("Not the newest");
+
+    // An answer from the board names the version it was picked on: that one can be printed, and says it was replaced.
+    const earlier = await host.harness.runCli(["board", "--version", newest.versions[0]!.id], { threadId: ctx.threadId });
+    expect(earlier.exitCode).toBe(0);
+    expect(earlier.stdout).toContain("«Launch», version 1, published");
+    expect(earlier.stdout).toContain("Not the newest: «Launch», version 2");
+    expect(earlier.stdout).toContain(report("first"));
+    const missing = await host.harness.runCli(["board", "--version", "nope"], { threadId: ctx.threadId });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("no board version nope");
   });
 
   it("starts another board on mode «new» and leaves the old one in the history", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardSegments, boardSignal, MAX_BOARD_VERSIONS, versionNumber, withVersion, type BoardVersion } from "./board";
+import { boardOrigin, boardSegments, boardSignal, MAX_BOARD_VERSIONS, versionNumber, withVersion, type BoardVersion } from "./board";
 
 const publish = (versions: readonly BoardVersion[], id: string, mode: "update" | "new", title: string | null = null): BoardVersion[] =>
   withVersion(versions, { id, title, mode, at: 1000 + versions.length }).versions;
@@ -69,6 +69,31 @@ describe("a board's text", () => {
 
   it("is empty for blank text", () => {
     expect(boardSegments("  \n")).toEqual([]);
+  });
+});
+
+describe("the line above an answer picked on a board", () => {
+  const versions = publish(publish(publish([], "a", "new", "Launch"), "b", "update"), "c", "new", "Second");
+
+  it("names the board, the version, its time and the command that prints it", () => {
+    expect(boardOrigin(versions, "c", "21 Nov 14:11")).toBe(
+      "From the status board «Second», version 1 of 21 Nov 14:11 (`bb genui board --version c` prints it):",
+    );
+  });
+
+  it("says when the version is not the newest of its board", () => {
+    const two = publish(publish([], "a", "new", "Launch"), "b", "update");
+    expect(boardOrigin(two, "a", "21 Nov 13:00")).toBe(
+      "From the status board «Launch», version 1 of 21 Nov 13:00, not the newest (version 2 is) (`bb genui board --version a` prints it):",
+    );
+  });
+
+  it("says when a newer board replaced it", () => {
+    expect(boardOrigin(versions, "b", "21 Nov 13:30")).toContain("version 2 of 21 Nov 13:30, an earlier board (");
+  });
+
+  it("is nothing for a version the thread no longer has", () => {
+    expect(boardOrigin(versions, "gone", "now")).toBeNull();
   });
 });
 

@@ -59,7 +59,8 @@ function readEntry(value: unknown): SheetEntry | null {
   const strings = [entry.block, entry.question, entry.message, entry.text].every((field) => typeof field === "string");
   const numbers = [entry.fence, entry.position, entry.seq].every((field) => typeof field === "number");
   const reply = entry.reply === null || typeof entry.reply === "number";
-  return strings && numbers && reply && isSelection(entry.selection) ? (entry as unknown as SheetEntry) : null;
+  const origin = entry.origin === undefined || entry.origin === null || typeof entry.origin === "string";
+  return strings && numbers && reply && origin && isSelection(entry.selection) ? (entry as unknown as SheetEntry) : null;
 }
 
 function readWritten(value: unknown): WrittenBlock | null {

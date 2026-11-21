@@ -17,6 +17,12 @@ export interface StagedEntry {
   readonly seq: number;
   /** What the agent receives for this question; one line per field for a Form. */
   readonly text: string;
+  /**
+   * For a question that is not in a reply (a status board): the line saying
+   * where it stands, written once above that source's answers, because the
+   * chat the message lands in may have moved on since.
+   */
+  readonly origin?: string | null;
 }
 
 /**
@@ -35,12 +41,21 @@ export function orderEntries<E extends StagedEntry>(entries: readonly E[]): E[] 
   });
 }
 
-/** The answers block for these entries: one line (a Form's several) per answer in reply order; null when there is none. */
+/**
+ * The answers block for these entries: one line (a Form's several) per
+ * answer in reply order; null when there is none. Answers to replies come
+ * first, as they read on from the chat; answers from another source follow,
+ * each source under its own `origin` line.
+ */
 export function answersText(entries: readonly StagedEntry[]): string | null {
-  const lines = orderEntries(entries)
-    .map((entry) => entry.text.trim())
-    .filter((text) => text !== "");
-  return lines.length === 0 ? null : lines.join("\n");
+  const answered = orderEntries(entries).filter((entry) => entry.text.trim() !== "");
+  if (answered.length === 0) return null;
+  const originOf = (entry: StagedEntry): string | null => entry.origin ?? null;
+  const lines = answered.filter((entry) => originOf(entry) === null).map((entry) => entry.text.trim());
+  for (const origin of new Set(answered.flatMap((entry) => originOf(entry) ?? []))) {
+    lines.push(origin, ...answered.filter((entry) => originOf(entry) === origin).map((entry) => entry.text.trim()));
+  }
+  return lines.join("\n");
 }
 
 /** A mention pill's place in the draft text (UTF-16 offsets). */

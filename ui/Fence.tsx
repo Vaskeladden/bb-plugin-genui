@@ -72,6 +72,7 @@ export const Fence = memo(function Fence({
   messageId,
   fence,
   actions,
+  origin,
 }: {
   language: FenceLanguage;
   code: string;
@@ -84,9 +85,11 @@ export const Fence = memo(function Fence({
   /** The block's index among the message's blocks of its language. */
   fence: number;
   actions: ThreadActions;
+  /** For a block outside the chat (a status board): the line written above its answers, saying where they come from. */
+  origin?: string;
 }) {
   return language === "app" ? (
-    <AppFence code={code} complete={complete} stateKey={stateKey} threadId={threadId} messageId={messageId} fence={fence} actions={actions} />
+    <AppFence code={code} complete={complete} stateKey={stateKey} threadId={threadId} messageId={messageId} fence={fence} actions={actions} origin={origin} />
   ) : (
     <UiFence
       code={code}
@@ -96,16 +99,17 @@ export const Fence = memo(function Fence({
       messageId={messageId}
       fence={fence}
       actions={actions}
+      origin={origin}
     />
   );
 });
 
 /** Where a block's answers go in its thread (see AnswerTarget), for ```ui blocks and apps alike. */
-function useAnswerTarget(threadId: string, messageId: string, fence: number, actions: ThreadActions): AnswerTarget {
+function useAnswerTarget(threadId: string, messageId: string, fence: number, actions: ThreadActions, origin: string | undefined): AnswerTarget {
   const reply = useReplyIndex(threadId, messageId);
   return useMemo<AnswerTarget>(
-    () => ({ kind: "thread", threadId, messageId, fence, reply, send: (text) => actions.send(threadId, text) }),
-    [threadId, messageId, fence, reply, actions],
+    () => ({ kind: "thread", threadId, messageId, fence, reply, origin, send: (text) => actions.send(threadId, text) }),
+    [threadId, messageId, fence, reply, origin, actions],
   );
 }
 
@@ -117,6 +121,7 @@ function AppFence({
   messageId,
   fence,
   actions,
+  origin,
 }: {
   code: string;
   complete: boolean;
@@ -125,8 +130,9 @@ function AppFence({
   messageId: string;
   fence: number;
   actions: ThreadActions;
+  origin: string | undefined;
 }) {
-  const answers = useAnswerTarget(threadId, messageId, fence, actions);
+  const answers = useAnswerTarget(threadId, messageId, fence, actions, origin);
   const superseded = useSuperseded(threadId, messageId);
   // Null while BB's outline is read: an app's answers stay open until it says.
   return <AppBlock html={code} ready={complete} stateKey={stateKey} answers={answers} superseded={superseded === true} />;
@@ -140,6 +146,7 @@ function UiFence({
   messageId,
   fence,
   actions,
+  origin,
 }: {
   code: string;
   complete: boolean;
@@ -148,6 +155,7 @@ function UiFence({
   messageId: string;
   fence: number;
   actions: ThreadActions;
+  origin: string | undefined;
 }) {
   const result = useMemo(() => compileStreaming(code), [code]);
   // While the reply streams, an unparseable prefix keeps the last good render.
@@ -159,7 +167,7 @@ function UiFence({
   const readText = useTextLoader({ threadId });
   const loadAudio = useAudioLoader({ threadId });
   const loadAsset = useAssetLoader({ threadId });
-  const answers = useAnswerTarget(threadId, messageId, fence, actions);
+  const answers = useAnswerTarget(threadId, messageId, fence, actions, origin);
   const openFile = useCallback((path: string, line?: number) => actions.openFile(threadId, path, line), [actions, threadId]);
   const superseded = useSuperseded(threadId, messageId);
   const motion = useMotionScope();
