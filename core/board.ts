@@ -17,6 +17,12 @@ export interface BoardVersion {
   readonly title: string;
   /** When it was published, in epoch milliseconds. */
   readonly at: number;
+  /**
+   * The chat message it was published after: the `msg` of an
+   * `@thread:<id>#msg=<n>` link. Null when the thread had none to find;
+   * absent on versions stored before boards recorded it.
+   */
+  readonly chat?: number | null;
 }
 
 export const DEFAULT_BOARD_TITLE = "Status";
@@ -34,7 +40,7 @@ export const MAX_BOARD_VERSIONS = 30;
  */
 export function withVersion(
   versions: readonly BoardVersion[],
-  published: { readonly id: string; readonly title: string | null; readonly mode: BoardMode; readonly at: number },
+  published: { readonly id: string; readonly title: string | null; readonly mode: BoardMode; readonly at: number; readonly chat: number | null },
 ): { readonly versions: BoardVersion[]; readonly added: BoardVersion; readonly dropped: string[] } {
   const newest = versions.at(-1);
   const joins = published.mode === "update" && newest !== undefined;
@@ -43,6 +49,7 @@ export function withVersion(
     board: joins ? newest.board : published.id,
     title: published.title ?? (joins ? newest.title : DEFAULT_BOARD_TITLE),
     at: published.at,
+    chat: published.chat,
   };
   const all = [...versions, added];
   const kept = all.slice(-MAX_BOARD_VERSIONS);
@@ -82,20 +89,52 @@ export function boardSegments(content: string): BoardSegment[] {
   return segments;
 }
 
+/** A thread event as BB lists it, as far as a board reads one. */
+export interface ChatEvent {
+  readonly seq: number;
+  readonly type: string;
+  readonly data?: unknown;
+}
+
+/** The event types `chatMessage` reads; ask BB for these only. */
+export const CHAT_MESSAGE_EVENTS = ["client/turn/requested", "item/completed"] as const;
+
+/**
+ * The newest chat message among a thread's events, newest first: a message
+ * sent to the thread, or a finished reply of its agent. Its `seq` is what an
+ * `@thread:<id>#msg=<n>` link names. Null when the events hold none.
+ */
+export function chatMessage(events: readonly ChatEvent[]): number | null {
+  for (const event of events) {
+    if (event.type === "client/turn/requested") return event.seq;
+    if (event.type !== "item/completed" || typeof event.data !== "object" || event.data === null) continue;
+    const { item } = event.data as { item?: unknown };
+    if (typeof item === "object" && item !== null && (item as { type?: unknown }).type === "agentMessage") return event.seq;
+  }
+  return null;
+}
+
+/** Where the chat stood when a version was published, as a link BB and `bb thread log --message` read; null when not recorded. */
+export function chatLink(threadId: string, version: BoardVersion): string | null {
+  return typeof version.chat === "number" ? `@thread:${threadId}#msg=${version.chat}` : null;
+}
+
 /**
  * The line above answers picked on a board version, in the user's message:
  * which board and version they answer, since the chat they land in may have
- * moved on after it was published, and the command that prints that version.
- * `published` is the version's time as the user reads it; null when `id` is
- * not one of `versions`.
+ * moved on after it was published; where the chat stood then, when the version
+ * recorded it; and the command that prints that version. `published` is the
+ * version's time as the user reads it; null when `id` is not one of `versions`.
  */
-export function boardOrigin(versions: readonly BoardVersion[], id: string, published: string): string | null {
+export function boardOrigin(threadId: string, versions: readonly BoardVersion[], id: string, published: string): string | null {
   const version = versions.find((candidate) => candidate.id === id);
   const number = versionNumber(versions, id);
   const newest = versions.at(-1);
   if (version === undefined || number === null || newest === undefined) return null;
   const newer = newest.id === id ? "" : newest.board === version.board ? `, not the newest (version ${versionNumber(versions, newest.id)} is)` : ", an earlier board";
-  return `From the status board «${version.title}», version ${number} of ${published}${newer} (\`bb genui board --version ${id}\` prints it):`;
+  const link = chatLink(threadId, version);
+  const made = link === null ? "" : `, made at ${link}`;
+  return `From the status board «${version.title}», version ${number} of ${published}${newer}${made} (\`bb genui board --version ${id}\` prints it):`;
 }
 
 /** What a publish announces on the realtime channel; null for anything else on it. */

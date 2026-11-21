@@ -118,7 +118,7 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
 
   let body: ReactNode;
   if (shown !== null && version !== undefined && board !== null) {
-    const origin = boardOrigin(board.versions, shown.id, TIME.format(version.at)) ?? undefined;
+    const origin = boardOrigin(threadId, board.versions, shown.id, TIME.format(version.at)) ?? undefined;
     body = <BoardBody key={shown.id} threadId={threadId} id={shown.id} content={shown.content} origin={origin} />;
   }
   else if (load.status === "loading") body = <Notice>Loading the board…</Notice>;

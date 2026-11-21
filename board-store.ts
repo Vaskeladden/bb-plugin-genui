@@ -9,7 +9,7 @@ import { z } from "zod";
 import { BOARD_CHANNEL } from "./board-channel";
 import { withVersion, type BoardMode, type BoardVersion } from "./core/board";
 
-const versionSchema = z.object({ id: z.string(), board: z.string(), title: z.string(), at: z.number() });
+const versionSchema = z.object({ id: z.string(), board: z.string(), title: z.string(), at: z.number(), chat: z.number().nullable().optional() });
 const versionsSchema = z.array(versionSchema);
 const contentSchema = z.object({ content: z.string() });
 
@@ -18,8 +18,11 @@ export interface BoardStore {
   versions(threadId: string): Promise<BoardVersion[]>;
   /** A version's text; null when the thread has no such version. */
   content(threadId: string, id: string): Promise<string | null>;
-  /** Stores a version, drops the ones that fell out of the history, and announces it. */
-  publish(threadId: string, published: { content: string; title: string | null; mode: BoardMode }): Promise<{ added: BoardVersion; versions: BoardVersion[] }>;
+  /** Stores a version, drops the ones that fell out of the history, and announces it. `chat` is the chat message it comes after. */
+  publish(
+    threadId: string,
+    published: { content: string; title: string | null; mode: BoardMode; chat: number | null },
+  ): Promise<{ added: BoardVersion; versions: BoardVersion[] }>;
 }
 
 export function createBoardStore(bb: Pick<BbPluginApi, "storage" | "realtime">, now: () => number = Date.now): BoardStore {
@@ -37,8 +40,8 @@ export function createBoardStore(bb: Pick<BbPluginApi, "storage" | "realtime">, 
       const parsed = contentSchema.safeParse(await bb.storage.kv.get(contentKey(threadId, id)));
       return parsed.success ? parsed.data.content : null;
     },
-    async publish(threadId, { content, title, mode }) {
-      const next = withVersion(await versions(threadId), { id: randomUUID().slice(0, 8), title, mode, at: now() });
+    async publish(threadId, { content, title, mode, chat }) {
+      const next = withVersion(await versions(threadId), { id: randomUUID().slice(0, 8), title, mode, at: now(), chat });
       // The text first: a version in the list always has its text.
       await bb.storage.kv.set(contentKey(threadId, next.added.id), { content });
       await bb.storage.kv.set(listKey(threadId), next.versions);

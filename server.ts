@@ -36,7 +36,18 @@ import {
 } from "./data-source";
 import { checkApp, MAX_APP_CHARS } from "./core/appLint";
 import { checkSpec, renderReplyMarkdown } from "./fallback";
-import { boardSegments, MAX_BOARD_CHARS, MAX_BOARD_TITLE_CHARS, MAX_BOARD_VERSIONS, versionNumber, type BoardMode, type BoardVersion } from "./core/board";
+import {
+  boardSegments,
+  CHAT_MESSAGE_EVENTS,
+  chatLink,
+  chatMessage,
+  MAX_BOARD_CHARS,
+  MAX_BOARD_TITLE_CHARS,
+  MAX_BOARD_VERSIONS,
+  versionNumber,
+  type BoardMode,
+  type BoardVersion,
+} from "./core/board";
 import { createBoardStore } from "./board-store";
 import type { Value } from "./core/types";
 import {
@@ -306,6 +317,20 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   const boards = createBoardStore(bb);
+  /**
+   * The chat message a board published now comes after, so an answer picked on
+   * it later can link to where the chat stood. Null when the thread's newest
+   * events hold no message or can't be read: the board is published either
+   * way, and its answers then name the version without the link.
+   */
+  async function newestChatMessage(threadId: string): Promise<number | null> {
+    try {
+      return chatMessage(await bb.sdk.threads.events.list({ threadId, order: "desc", limit: "100", types: CHAT_MESSAGE_EVENTS }));
+    } catch (cause) {
+      bb.log.warn(`board: no chat message found for ${threadId}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return null;
+    }
+  }
   /** Checks every block of a board and stores it as a version; a failed check stores nothing. For the show_board tool and `bb genui show-board`. */
   async function publishBoard(
     threadId: string,
@@ -333,7 +358,7 @@ export default async function plugin(bb: BbPluginApi) {
         text: `Nothing was stored: ${failures.length} block${failures.length === 1 ? "" : "s"} failed the check. Fix and publish again.\n\n${failures.join("\n\n")}`,
       };
     }
-    const { added, versions } = await boards.publish(threadId, { content, title, mode });
+    const { added, versions } = await boards.publish(threadId, { content, title, mode, chat: await newestChatMessage(threadId) });
     return {
       ok: true,
       text: `On the status board as version ${versionNumber(versions, added.id)} of «${added.title}»; the side panel shows it. Don't repeat its content in your reply.`,
@@ -342,7 +367,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "show_board",
     description:
-      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it only when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on. When the work has moved on since that version, print it (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
+      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it only when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
     parameters: z.object({
       content: z.string().min(1).max(MAX_BOARD_CHARS).describe("The board: markdown with ```ui and ```app blocks, as a reply would hold them"),
       title: z.string().min(1).max(MAX_BOARD_TITLE_CHARS).optional().describe("A few words naming the board; omitted, an update keeps the board's title"),
@@ -520,8 +545,11 @@ export default async function plugin(bb: BbPluginApi) {
                 hint: `The history keeps the newest ${MAX_BOARD_VERSIONS} versions. The newest is ${newest.id}: bb genui board`,
               });
             }
-            const describe = (version: BoardVersion): string =>
-              `«${version.title}», version ${versionNumber(versions, version.id)}, published ${new Date(version.at).toISOString()}`;
+            const describe = (version: BoardVersion): string => {
+              const link = chatLink(threadId, version);
+              const made = link === null ? "" : ` at ${link}`;
+              return `«${version.title}», version ${versionNumber(versions, version.id)}, published ${new Date(version.at).toISOString()}${made}`;
+            };
             // An earlier version says so, and what replaced it: the work may have moved on since.
             const later = shown.id === newest.id ? "" : `\nNot the newest: ${describe(newest)} (bb genui board) came after it.`;
             return { exitCode: 0, stdout: `${describe(shown)}${later}\n\n${content}\n` };

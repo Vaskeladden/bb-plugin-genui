@@ -31,7 +31,7 @@ describe("the status board", () => {
     };
     const get = (id: string | null) =>
       host.harness.callRpc("board_get", { threadId: ctx.threadId, id }) as Promise<{
-        versions: { id: string; board: string; title: string; at: number }[];
+        versions: { id: string; board: string; title: string; at: number; chat?: number | null }[];
         shown: { id: string; content: string } | null;
       }>;
     return { host, show, get };
@@ -99,6 +99,35 @@ describe("the status board", () => {
     const missing = await host.harness.runCli(["board", "--version", "nope"], { threadId: ctx.threadId });
     expect(missing.exitCode).toBe(1);
     expect(missing.stderr).toContain("no board version nope");
+  });
+
+  it("records the chat message a version was made after, and prints it as a link", async () => {
+    const { show, get, host } = await start();
+    host.harness.sdk.stub("threads.events.list", async () => [
+      { seq: 41, type: "item/completed", data: { item: { type: "commandExecution" } } },
+      { seq: 40, type: "item/completed", data: { item: { type: "agentMessage" } } },
+      { seq: 12, type: "client/turn/requested", data: {} },
+    ]);
+    await show({ content: report("first"), title: "Launch" });
+    expect(host.harness.sdk.callsTo("threads.events.list").at(-1)?.[0]).toMatchObject({
+      threadId: ctx.threadId,
+      order: "desc",
+      types: ["client/turn/requested", "item/completed"],
+    });
+    expect((await get(null)).versions[0]).toMatchObject({ chat: 40 });
+    const cli = await host.harness.runCli(["board"], { threadId: ctx.threadId });
+    expect(cli.stdout).toContain(` at @thread:${ctx.threadId}#msg=40`);
+  });
+
+  it("publishes without the link when the thread's events can't be read", async () => {
+    const { show, get, host } = await start();
+    host.harness.sdk.stub("threads.events.list", async () => {
+      throw new Error("HTTP 500");
+    });
+    expect(await show({ content: report("first") })).toMatchObject({ isError: false });
+    expect((await get(null)).versions[0]).toMatchObject({ chat: null });
+    const cli = await host.harness.runCli(["board"], { threadId: ctx.threadId });
+    expect(cli.stdout).not.toContain("#msg=");
   });
 
   it("starts another board on mode «new» and leaves the old one in the history", async () => {

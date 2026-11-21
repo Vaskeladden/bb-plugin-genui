@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { boardOrigin, boardSegments, boardSignal, MAX_BOARD_VERSIONS, versionNumber, withVersion, type BoardVersion } from "./board";
+import { boardOrigin, boardSegments, boardSignal, chatLink, chatMessage, MAX_BOARD_VERSIONS, versionNumber, withVersion, type BoardVersion } from "./board";
 
 const publish = (versions: readonly BoardVersion[], id: string, mode: "update" | "new", title: string | null = null): BoardVersion[] =>
-  withVersion(versions, { id, title, mode, at: 1000 + versions.length }).versions;
+  withVersion(versions, { id, title, mode, at: 1000 + versions.length, chat: null }).versions;
 
 describe("a board's versions", () => {
   it("starts a board with the first version, whatever the mode", () => {
     const versions = publish([], "a", "update");
-    expect(versions).toEqual([{ id: "a", board: "a", title: "Status", at: 1000 }]);
+    expect(versions).toEqual([{ id: "a", board: "a", title: "Status", at: 1000, chat: null }]);
   });
 
   it("adds an update to the newest board and keeps its title", () => {
@@ -38,7 +38,7 @@ describe("a board's versions", () => {
   it("keeps the newest versions when the history is full and names the one that fell out", () => {
     let versions: BoardVersion[] = [];
     for (let index = 0; index < MAX_BOARD_VERSIONS; index++) versions = publish(versions, `v${index}`, "update");
-    const next = withVersion(versions, { id: "last", title: null, mode: "update", at: 5000 });
+    const next = withVersion(versions, { id: "last", title: null, mode: "update", at: 5000, chat: null });
     expect(next.versions).toHaveLength(MAX_BOARD_VERSIONS);
     expect(next.versions[0]?.id).toBe("v1");
     expect(next.added.id).toBe("last");
@@ -76,24 +76,48 @@ describe("the line above an answer picked on a board", () => {
   const versions = publish(publish(publish([], "a", "new", "Launch"), "b", "update"), "c", "new", "Second");
 
   it("names the board, the version, its time and the command that prints it", () => {
-    expect(boardOrigin(versions, "c", "21 Nov 14:11")).toBe(
+    expect(boardOrigin("thr_1", versions, "c", "21 Nov 14:11")).toBe(
       "From the status board «Second», version 1 of 21 Nov 14:11 (`bb genui board --version c` prints it):",
     );
   });
 
   it("says when the version is not the newest of its board", () => {
     const two = publish(publish([], "a", "new", "Launch"), "b", "update");
-    expect(boardOrigin(two, "a", "21 Nov 13:00")).toBe(
+    expect(boardOrigin("thr_1", two, "a", "21 Nov 13:00")).toBe(
       "From the status board «Launch», version 1 of 21 Nov 13:00, not the newest (version 2 is) (`bb genui board --version a` prints it):",
     );
   });
 
   it("says when a newer board replaced it", () => {
-    expect(boardOrigin(versions, "b", "21 Nov 13:30")).toContain("version 2 of 21 Nov 13:30, an earlier board (");
+    expect(boardOrigin("thr_1", versions, "b", "21 Nov 13:30")).toContain("version 2 of 21 Nov 13:30, an earlier board (");
+  });
+
+  it("links to where the chat stood when the version was made", () => {
+    const made = withVersion(versions, { id: "d", title: null, mode: "update", at: 4, chat: 412 }).versions;
+    expect(boardOrigin("thr_1", made, "d", "21 Nov 15:00")).toBe(
+      "From the status board «Second», version 2 of 21 Nov 15:00, made at @thread:thr_1#msg=412 (`bb genui board --version d` prints it):",
+    );
+    expect(chatLink("thr_1", made.at(-1)!)).toBe("@thread:thr_1#msg=412");
+    // A version stored before boards recorded the chat has no link.
+    expect(chatLink("thr_1", { id: "x", board: "x", title: "Old", at: 1 })).toBeNull();
   });
 
   it("is nothing for a version the thread no longer has", () => {
-    expect(boardOrigin(versions, "gone", "now")).toBeNull();
+    expect(boardOrigin("thr_1", versions, "gone", "now")).toBeNull();
+  });
+});
+
+describe("the newest chat message among a thread's events", () => {
+  const reply = (seq: number, type: string) => ({ seq, type: "item/completed", data: { item: { type } } });
+
+  it("is the newest finished reply or message sent to the thread", () => {
+    expect(chatMessage([reply(9, "commandExecution"), reply(8, "agentMessage"), { seq: 3, type: "client/turn/requested" }])).toBe(8);
+    expect(chatMessage([reply(9, "reasoning"), { seq: 7, type: "client/turn/requested", data: {} }, reply(5, "agentMessage")])).toBe(7);
+  });
+
+  it("is nothing when the events hold no message", () => {
+    expect(chatMessage([])).toBeNull();
+    expect(chatMessage([reply(9, "toolCall"), { seq: 8, type: "item/completed" }, { seq: 7, type: "item/completed", data: null }])).toBeNull();
   });
 });
 
