@@ -198,6 +198,13 @@ export class AnswerSheet {
     return snapshot;
   }
 
+  /**
+   * How many answers stand in the composer's draft, waiting for the user to
+   * send it: none without a composer (those were sent at once), and none
+   * while an emptied draft may have been the send.
+   */
+  readonly waiting = (): number => (this.sending || this.composer() === null ? 0 : this.entries.length);
+
   /** Stages (or restages) a question's answer. */
   stage(entry: Omit<SheetEntry, "seq">): void {
     const blocks = this.confirmDeletion();

@@ -15,13 +15,23 @@ const bb = vi.hoisted(() => {
     contents: {} as Record<string, string>,
     opened: [] as unknown[],
     accepts: true,
+    /** What the board's Update and New board asked for, and what the status plugin answers. */
+    requests: [] as unknown[],
+    requestResult: { ok: true } as { ok: true } | { ok: false; message: string },
+    /** The thread's message field, when it is on screen. */
+    composers: [] as unknown[],
   };
   return {
     state,
     handlers,
     publish: (payload: unknown) => handlers.forEach((handler) => handler(payload)),
     rpc: {
-      call: async (_method: string, { id }: { threadId: string; id: string | null }) => {
+      call: async (method: string, input: { threadId: string; id: string | null }) => {
+        if (method === "board_request") {
+          state.requests.push(input);
+          return state.requestResult;
+        }
+        const { id } = input;
         const shownId = id ?? state.versions.at(-1)?.id ?? null;
         return { versions: state.versions, shown: shownId === null ? null : { id: shownId, content: state.contents[shownId] ?? "" } };
       },
@@ -39,7 +49,7 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => {
   const { useEffect } = await import("react");
   return {
     ...(await importOriginal<typeof PluginSdkApp>()),
-    useComposers: () => [],
+    useComposers: () => bb.state.composers,
     useSdk: () => ({}),
     useBbNavigate: () => bb.navigate,
     useRpc: () => bb.rpc,
@@ -59,6 +69,35 @@ vi.mock("./useSuperseded", () => ({ useSuperseded: () => null, useReplyIndex: ()
 const THREAD = "thr_board";
 const report = (line: string): string => [`Bottom line: ${line}.`, "", "```ui", `Card("Status", [Text("${line} block")])`, "```"].join("\n");
 const version = (id: string, board: string, title: string, at: number): BoardVersion => ({ id, board, title, at });
+const button = (label: string): HTMLButtonElement | undefined => [...container.querySelectorAll("button")].find((candidate) => candidate.textContent === label);
+
+/** A thread message field as BB hands it to a plugin: a draft the answer sheet writes into, and a submit. */
+function fakeComposer(threadId: string) {
+  const submitted = new Set<() => void>();
+  const composer = {
+    scope: { kind: "thread", threadId },
+    key: `thread:${threadId}`,
+    isSubmitting: false,
+    draft: { text: "", mentions: [], attachments: [] } as { text: string; mentions: unknown[]; attachments: unknown[] },
+    sent: [] as string[],
+    blocked: null as string | null,
+    replace(next: unknown) {
+      const result = typeof next === "function" ? next(composer.draft) : next;
+      if (result !== composer.draft) composer.draft = { ...composer.draft, ...result };
+    },
+    onSubmitted(listener: () => void) {
+      submitted.add(listener);
+      return () => void submitted.delete(listener);
+    },
+    async submit() {
+      if (composer.blocked !== null) throw new Error(composer.blocked);
+      composer.sent.push(composer.draft.text);
+      composer.draft = { text: "", mentions: [], attachments: [] };
+      submitted.forEach((listener) => listener());
+    },
+  };
+  return composer;
+}
 
 let container: HTMLDivElement;
 let root: Root;
@@ -92,6 +131,9 @@ beforeEach(() => {
   bb.state.contents = {};
   bb.state.opened = [];
   bb.state.accepts = true;
+  bb.state.requests = [];
+  bb.state.requestResult = { ok: true };
+  bb.state.composers = [];
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -168,6 +210,77 @@ describe("the Status board tab", () => {
     await settle();
     expect(container.textContent).toContain("third block");
     expect(container.querySelector("header")?.textContent).toContain("Version 3");
+  });
+});
+
+describe("going on with the work from the board", () => {
+  it("asks for an update or a new board, and says so until the report arrives", async () => {
+    bb.state.versions = [version("a", "a", "Launch", 1_000)];
+    bb.state.contents = { a: report("first") };
+    await renderTab();
+    await act(async () => button("Update")?.click());
+    await settle();
+    expect(bb.state.requests).toEqual([{ threadId: THREAD, mode: "update" }]);
+    expect(container.querySelector("header [role=status]")?.textContent).toContain("Asked the agent for an update");
+
+    await act(async () => button("New board")?.click());
+    await settle();
+    expect(bb.state.requests.at(-1)).toEqual({ threadId: THREAD, mode: "new" });
+    expect(container.querySelector("header [role=status]")?.textContent).toContain("a new board");
+
+    // The report it asked for is published: nothing is pending any more.
+    bb.state.versions = [...bb.state.versions, version("b", "b", "Launch 2", 2_000)];
+    bb.state.contents.b = report("second");
+    act(() => bb.publish({ threadId: THREAD, id: "b" }));
+    await settle();
+    expect(container.querySelector("header [role=status]")).toBeNull();
+  });
+
+  it("says why when the report could not be asked for", async () => {
+    bb.state.versions = [version("a", "a", "Launch", 1_000)];
+    bb.state.contents = { a: report("first") };
+    bb.state.requestResult = { ok: false, message: "plugin jb-flow is not installed" };
+    await renderTab();
+    await act(async () => button("Update")?.click());
+    await settle();
+    expect(container.querySelector("header [role=alert]")?.textContent).toBe("Couldn't ask for a report: plugin jb-flow is not installed");
+  });
+
+  it("starts the first board from the empty tab", async () => {
+    await renderTab();
+    await act(async () => button("Run Ultrastatus")?.click());
+    await settle();
+    expect(bb.state.requests).toEqual([{ threadId: THREAD, mode: "new" }]);
+    expect(container.textContent).toContain("Asked the agent for a new board");
+  });
+
+  it("stages a pick in the message field and sends it from the board", async () => {
+    const composer = fakeComposer(THREAD);
+    bb.state.composers = [composer];
+    bb.state.versions = [version("a", "a", "Launch", 1_000)];
+    bb.state.contents = { a: ["What next?", "", "```ui", 'Card("Next", [Button("Ship it"), Button("Wait")])', "```"].join("\n") };
+    await renderTab();
+    // Nothing picked: no bar.
+    expect(container.querySelector("footer")).toBeNull();
+
+    await act(async () => button("Ship it")?.click());
+    await settle();
+    expect(composer.draft.text).toContain("Ship it");
+    expect(container.querySelector("footer")?.textContent).toContain("1 answer ready");
+
+    // BB refuses the send: the bar says why and the answer stays.
+    composer.blocked = "Uploads are still running";
+    await act(async () => button("Send to chat")?.click());
+    await settle();
+    expect(container.querySelector("footer [role=alert]")?.textContent).toBe("Not sent: Uploads are still running");
+    expect(composer.sent).toEqual([]);
+
+    composer.blocked = null;
+    await act(async () => button("Send to chat")?.click());
+    await settle();
+    expect(composer.sent).toHaveLength(1);
+    expect(composer.sent[0]).toContain("Ship it");
+    expect(container.querySelector("footer")).toBeNull();
   });
 });
 

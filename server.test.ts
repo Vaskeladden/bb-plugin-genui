@@ -37,6 +37,25 @@ describe("the status board", () => {
     return { host, show, get };
   }
 
+  it("passes the board's Update and New board on to the status plugin, and says why when it can't", async () => {
+    const { host } = await start();
+    host.harness.sdk.stub("plugins.callRpc", async () => ({ ok: true, children: 2 }));
+    expect(await host.harness.callRpc("board_request", { threadId: ctx.threadId, mode: "new" })).toEqual({ ok: true });
+    expect(host.harness.sdk.callsTo("plugins.callRpc").at(-1)?.[0]).toMatchObject({
+      pluginId: "jb-flow",
+      method: "thread_status_request",
+      input: { threadId: ctx.threadId, kind: "ultra", board: "new" },
+    });
+
+    host.harness.sdk.stub("plugins.callRpc", async () => {
+      throw new Error("plugin jb-flow is not installed");
+    });
+    expect(await host.harness.callRpc("board_request", { threadId: ctx.threadId, mode: "update" })).toEqual({
+      ok: false,
+      message: "plugin jb-flow is not installed",
+    });
+  });
+
   it("has no board until one is published", async () => {
     const { get, host } = await start();
     expect(await get(null)).toEqual({ versions: [], shown: null });

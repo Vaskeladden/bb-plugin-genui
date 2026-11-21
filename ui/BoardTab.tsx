@@ -4,10 +4,17 @@
 // in the picker, so a board is a point in time the user can go back to.
 // BoardOpener, mounted with every visible thread, opens the tab when a version
 // the user hasn't seen is published.
-import { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+//
+// The board is where the user goes on with the work, not only where they read
+// it: Update and New board ask the agent for a fresh report, and what the user
+// picks in the board's blocks (a step, a decision, a form) is staged in the
+// thread's message field as in a reply; the bar at the bottom sends it without
+// leaving the side panel.
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import {
   Markdown,
   useBbNavigate,
+  useComposers,
   useRealtime,
   useRpc,
   type PluginThreadHeaderActionProps,
@@ -15,10 +22,11 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { cn } from "@/lib/utils";
 import { BOARD_CHANNEL } from "../board-channel";
-import { boardSegments, boardSignal, versionNumber, type BoardVersion } from "../core/board";
+import { boardSegments, boardSignal, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
 import { relativeTime } from "../core/project";
 import type { rpcContract } from "../server";
 import { Fence, useThreadActions } from "./Fence";
+import { flushAnswers, sheetFor } from "./answerSheet";
 import { useMotionScope } from "./components/motion";
 
 /** The `threadPanelAction` id the tab is registered under. */
@@ -35,6 +43,20 @@ interface Board {
 }
 
 type Load = { readonly status: "loading" } | { readonly status: "failed"; readonly message: string } | { readonly status: "ready" };
+
+/** A request for a fresh report, from the board's own buttons, until the report it asked for is published. */
+type Asked =
+  | { readonly status: "idle" }
+  | { readonly status: "asking"; readonly mode: BoardMode }
+  | { readonly status: "asked"; readonly mode: BoardMode }
+  | { readonly status: "failed"; readonly message: string };
+
+const BUTTON =
+  "min-h-10 cursor-pointer rounded-md border border-border px-3 text-xs font-medium hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
+const PRIMARY_BUTTON =
+  "min-h-10 cursor-pointer rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
+
+const messageOf = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -54,13 +76,26 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
   const [published, setPublished] = useState(0);
   const [board, setBoard] = useState<Board | null>(null);
   const [load, setLoad] = useState<Load>({ status: "loading" });
+  const [asked, setAsked] = useState<Asked>({ status: "idle" });
 
   useRealtime(BOARD_CHANNEL, (payload) => {
     if (boardSignal(payload)?.threadId !== threadId) return;
     // A new version is what the user asked for: show it, whatever was picked.
     setPicked(null);
     setPublished((count) => count + 1);
+    setAsked({ status: "idle" });
   });
+
+  const request = useCallback(
+    (mode: BoardMode) => {
+      setAsked({ status: "asking", mode });
+      rpc.call("board_request", { threadId, mode }).then(
+        (result) => setAsked(result.ok ? { status: "asked", mode } : { status: "failed", message: result.message }),
+        (cause: unknown) => setAsked({ status: "failed", message: messageOf(cause) }),
+      );
+    },
+    [rpc, threadId],
+  );
 
   useEffect(() => {
     let live = true;
@@ -70,7 +105,7 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
         setBoard(result);
         setLoad({ status: "ready" });
       },
-      (cause: unknown) => live && setLoad({ status: "failed", message: cause instanceof Error ? cause.message : String(cause) }),
+      (cause: unknown) => live && setLoad({ status: "failed", message: messageOf(cause) }),
     );
     return () => {
       live = false;
@@ -85,7 +120,16 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
   if (shown !== null && version !== undefined) body = <BoardBody key={shown.id} threadId={threadId} id={shown.id} content={shown.content} />;
   else if (load.status === "loading") body = <Notice>Loading the board…</Notice>;
   else if (load.status === "failed") body = <Notice>Couldn&apos;t read the board: {load.message}</Notice>;
-  else body = <Notice>No status board yet. Run Ultrastatus in this thread and its report lands here.</Notice>;
+  else
+    body = (
+      <div className="flex flex-col items-start gap-3">
+        <Notice>No status board yet. Run Ultrastatus in this thread and its report lands here.</Notice>
+        <button type="button" disabled={asked.status === "asking"} onClick={() => request("new")} className={PRIMARY_BUTTON}>
+          Run Ultrastatus
+        </button>
+        <RequestNote asked={asked} />
+      </div>
+    );
 
   return (
     <div {...motion} className="@container flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -98,14 +142,29 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
               {version.id !== newest.id && <span className="ml-1.5 rounded bg-state-hover px-1.5 py-0.5 font-medium text-foreground">Earlier version</span>}
               {load.status === "failed" && <span className="ml-1.5 text-destructive">Couldn&apos;t refresh: {load.message}</span>}
             </p>
+            <RequestNote asked={asked} />
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={asked.status === "asking"}
+              onClick={() => request("update")}
+              title="Ask the agent for a fresh Ultrastatus as the next version of this board"
+              className={PRIMARY_BUTTON}
+            >
+              Update
+            </button>
+            <button
+              type="button"
+              disabled={asked.status === "asking"}
+              onClick={() => request("new")}
+              title="Ask the agent for a fresh Ultrastatus as a new board; this one stays in the history"
+              className={BUTTON}
+            >
+              New board
+            </button>
             {version.id !== newest.id && (
-              <button
-                type="button"
-                onClick={() => setPicked(null)}
-                className="min-h-10 cursor-pointer rounded-md border border-border px-3 text-xs font-medium hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
+              <button type="button" onClick={() => setPicked(null)} className={BUTTON}>
                 Latest
               </button>
             )}
@@ -127,7 +186,77 @@ export function BoardTab({ threadId }: PluginThreadPanelProps): ReactElement {
         </header>
       )}
       <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3")}>{body}</div>
+      <BoardAnswers threadId={threadId} />
     </div>
+  );
+}
+
+/** What became of the last Update or New board press; nothing before the first. */
+function RequestNote({ asked }: { asked: Asked }): ReactElement | null {
+  if (asked.status === "idle") return null;
+  if (asked.status === "failed") {
+    return (
+      <p role="alert" className="m-0 mt-1 text-xs text-destructive">
+        Couldn&apos;t ask for a report: {asked.message}
+      </p>
+    );
+  }
+  const what = asked.mode === "new" ? "a new board" : "an update";
+  return (
+    <p role="status" className="m-0 mt-1 text-xs text-muted-foreground">
+      {asked.status === "asking" ? `Asking for ${what}…` : `Asked the agent for ${what}. It shows here when the report is ready.`}
+    </p>
+  );
+}
+
+/**
+ * The answers the user picked on the board (and in the thread's replies) that
+ * stand in the message field, with a button that sends the field as it is, so
+ * a decision made in the side panel is sent from the side panel. Nothing when
+ * no answer waits, or when the thread's message field isn't on screen (then
+ * each pick was sent at once).
+ */
+function BoardAnswers({ threadId }: { threadId: string }): ReactElement | null {
+  const composer = useComposers().find((candidate) => candidate.scope.kind === "thread" && candidate.scope.threadId === threadId) ?? null;
+  const sheet = sheetFor(threadId);
+  const waiting = useSyncExternalStore(sheet.subscribe, sheet.waiting);
+  const [sending, setSending] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  if (composer === null || waiting === 0) return null;
+  // BB before `submit` on a composer: the answers are still in the field, sent from there.
+  const canSend = typeof composer.submit === "function";
+  const send = (): void => {
+    // A Form field still waiting out its typing pause is written first.
+    flushAnswers();
+    setSending(true);
+    setFailure(null);
+    composer.submit({ experimental_data: { source: "genui.board" } }).then(
+      () => setSending(false),
+      (cause: unknown) => {
+        setSending(false);
+        setFailure(messageOf(cause));
+      },
+    );
+  };
+  return (
+    <footer className="flex shrink-0 flex-col gap-2 border-t border-border bg-background px-4 py-2 @md:flex-row @md:items-center @md:justify-between">
+      <p className="m-0 min-w-0 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">
+          {waiting} {waiting === 1 ? "answer" : "answers"} ready
+        </span>{" "}
+        in the message field{canSend ? "." : ": send it from there."}
+        {failure !== null && (
+          <span role="alert" className="ml-1.5 text-destructive">
+            Not sent: {failure}
+          </span>
+        )}
+      </p>
+      {canSend && (
+        <button type="button" disabled={sending} onClick={send} title="Sends the message field as it is, with anything you typed there" className={cn(PRIMARY_BUTTON, "min-h-11 shrink-0")}>
+          {sending ? "Sending…" : "Send to chat"}
+        </button>
+      )}
+    </footer>
   );
 }
 

@@ -234,7 +234,19 @@ export const rpcContract = defineRpcContract({
       shown: z.object({ id: z.string(), content: z.string() }).nullable(),
     }),
   },
+  // The board's own Update and New board buttons: asks the thread's agent for
+  // a fresh Ultrastatus that lands on the board. The report prompt belongs to
+  // the JB Flow plugin, so this passes the request on to it; `ok` false says
+  // why it could not (that plugin is not installed, or it refused).
+  board_request: {
+    input: z.object({ threadId: projectThread, mode: z.enum(["update", "new"]) }),
+    output: z.union([z.object({ ok: z.literal(true) }), z.object({ ok: z.literal(false), message: z.string() })]),
+  },
 });
+
+/** The plugin that owns the Ultrastatus prompt, and the method its own Ultrastatus buttons call. */
+const STATUS_PLUGIN = "jb-flow";
+const STATUS_REQUEST_METHOD = "thread_status_request";
 
 export default async function plugin(bb: BbPluginApi) {
   const web = createWebLookups(bb);
@@ -423,6 +435,19 @@ export default async function plugin(bb: BbPluginApi) {
       const shownId = id ?? versions.at(-1)?.id ?? null;
       const content = shownId === null ? null : await boards.content(threadId, shownId);
       return { versions, shown: shownId === null || content === null ? null : { id: shownId, content } };
+    },
+    async board_request({ threadId, mode }) {
+      try {
+        await bb.sdk.plugins.callRpc({
+          pluginId: STATUS_PLUGIN,
+          method: STATUS_REQUEST_METHOD,
+          input: { threadId, kind: "ultra", board: mode },
+          outputSchema: z.object({ ok: z.boolean() }),
+        });
+        return { ok: true as const };
+      } catch (cause) {
+        return { ok: false as const, message: cause instanceof Error ? cause.message : String(cause) };
+      }
     },
   });
 
