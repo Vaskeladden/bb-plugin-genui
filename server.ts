@@ -15,7 +15,10 @@
 //   Changes, Commits, PullRequest and Threads, and keeps what Changes and
 //   Commits first showed per reply block; and its project's environments
 //   (project/environments.ts) for Environments,
-// - declares the `animations` setting, which only the page reads.
+// - declares the `animations` setting, which only the page reads,
+// - keeps each thread's status boards (board-store.ts): the show_board tool
+//   puts a checked report in the thread's side panel, as a new version of the
+//   board there or as a new board; `bb genui board` prints the current one.
 import { cliCommand, defineCli, defineRpcContract, PluginCliError, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -33,6 +36,8 @@ import {
 } from "./data-source";
 import { checkApp, MAX_APP_CHARS } from "./core/appLint";
 import { checkSpec, renderReplyMarkdown } from "./fallback";
+import { boardSegments, MAX_BOARD_CHARS, MAX_BOARD_TITLE_CHARS, versionNumber, type BoardMode, type BoardVersion } from "./core/board";
+import { createBoardStore } from "./board-store";
 import type { Value } from "./core/types";
 import {
   MAX_PATH_FILTERS,
@@ -219,6 +224,16 @@ export const rpcContract = defineRpcContract({
     input: z.object({ threadId: projectThread, environmentId: z.string().min(1).max(64) }),
     output: z.custom<EnvironmentDetailResult>(),
   },
+  // The thread's status boards: every version kept, oldest first, and the text
+  // of the one asked for (`id` null: the newest). `shown` is null when the
+  // thread has no board, or no such version.
+  board_get: {
+    input: z.object({ threadId: projectThread, id: z.string().min(1).max(64).nullable() }),
+    output: z.object({
+      versions: z.array(z.custom<BoardVersion>()),
+      shown: z.object({ id: z.string(), content: z.string() }).nullable(),
+    }),
+  },
 });
 
 export default async function plugin(bb: BbPluginApi) {
@@ -278,6 +293,59 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  const boards = createBoardStore(bb);
+  /** Checks every block of a board and stores it as a version; a failed check stores nothing. For the show_board tool and `bb genui show-board`. */
+  async function publishBoard(
+    threadId: string,
+    { content, title, mode }: { content: string; title: string | null; mode: BoardMode },
+  ): Promise<{ ok: boolean; text: string }> {
+    const segments = boardSegments(content);
+    if (segments.length === 0) return { ok: false, text: "The board is empty: nothing was stored." };
+    const failures: string[] = [];
+    for (const segment of segments) {
+      if (segment.kind !== "block") continue;
+      const { ok, report } =
+        segment.language === "app"
+          ? checkApp(segment.code)
+          : await checkSpec(
+              segment.code,
+              (request) => loadThreadFile(bb, threadId, request.path, request),
+              findImage,
+              projectReader(project, environments, threadId),
+            );
+      if (!ok) failures.push(`${segment.language} block ${segment.index + 1}:\n${report}`);
+    }
+    if (failures.length > 0) {
+      return {
+        ok: false,
+        text: `Nothing was stored: ${failures.length} block${failures.length === 1 ? "" : "s"} failed the check. Fix and publish again.\n\n${failures.join("\n\n")}`,
+      };
+    }
+    const { added, versions } = await boards.publish(threadId, { content, title, mode });
+    return {
+      ok: true,
+      text: `On the status board as version ${versionNumber(versions, added.id)} of «${added.title}»; the side panel shows it. Don't repeat its content in your reply.`,
+    };
+  }
+  bb.agents.registerTool({
+    name: "show_board",
+    description:
+      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it only when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there.",
+    parameters: z.object({
+      content: z.string().min(1).max(MAX_BOARD_CHARS).describe("The board: markdown with ```ui and ```app blocks, as a reply would hold them"),
+      title: z.string().min(1).max(MAX_BOARD_TITLE_CHARS).optional().describe("A few words naming the board; omitted, an update keeps the board's title"),
+      mode: z
+        .enum(["update", "new"])
+        .optional()
+        .describe('"update" (default) adds a version to the board the thread shows; "new" starts another board and leaves the old one in the history'),
+    }),
+    presentation: { label: { pending: "Updating the status board", completed: "Updated the status board" } },
+    async execute({ content, title, mode }, ctx) {
+      const { ok, text } = await publishBoard(ctx.threadId, { content, title: title ?? null, mode: mode ?? "update" });
+      return { content: [{ type: "text", text }], isError: !ok };
+    },
+  });
+
   // Threads configure last found to have a person reading their replies. BB
   // resolves configure before it asks instruction contributors, within the
   // same session resolution, so the code-work section below reaches exactly
@@ -297,7 +365,7 @@ export default async function plugin(bb: BbPluginApi) {
     personThreads.add(context.thread.id);
     if (personThreads.size > MAX_PERSON_THREADS) personThreads.delete(personThreads.values().next().value!);
     const instructions = web.isOn() ? AGENT_INSTRUCTIONS : AGENT_INSTRUCTIONS_WEB_OFF;
-    return { tools: ["check_ui", "ui_examples"], skills: [], instructions };
+    return { tools: ["check_ui", "ui_examples", "show_board"], skills: [], instructions };
   });
   bb.agents.contributeInstructions(({ threadId }) => (personThreads.has(threadId) ? CODE_WORK_INSTRUCTIONS : null));
 
@@ -350,12 +418,18 @@ export default async function plugin(bb: BbPluginApi) {
     project_threads: ({ threadId, ids }) => project.threads(threadId, ids),
     project_environments: ({ threadId }) => environments.environments(threadId, false),
     project_environment: ({ threadId, environmentId }) => environments.environment(threadId, environmentId),
+    async board_get({ threadId, id }) {
+      const versions = await boards.versions(threadId);
+      const shownId = id ?? versions.at(-1)?.id ?? null;
+      const content = shownId === null ? null : await boards.content(threadId, shownId);
+      return { versions, shown: shownId === null || content === null ? null : { id: shownId, content } };
+    },
   });
 
   bb.cli.register(
     defineCli({
       name: "genui",
-      summary: "Read replies that contain inline UI as plain markdown",
+      summary: "Read replies that contain inline UI as plain markdown, and a thread's status board",
       commands: {
         ask: cliCommand({
           summary: "Try a prompt in a subthread of this thread whose agent gets the inline UI instructions",
@@ -391,6 +465,61 @@ export default async function plugin(bb: BbPluginApi) {
               pluginMetadata: { audience: "person" },
             });
             return { exitCode: 0, stdout: `${thread.id}\n` };
+          },
+        }),
+        board: cliCommand({
+          summary: "Print a thread's status board as it was published: markdown with its ui and app blocks",
+          description: "Read it before you update the board, so the next version keeps its rows and order.",
+          positionals: [{ name: "thread", description: "Thread ID; defaults to the thread running the command" }],
+          async run(input, ctx) {
+            const threadId = input.positionals.thread ?? ctx.threadId;
+            if (threadId === undefined) {
+              throw new PluginCliError("no thread to read the board of", {
+                code: "thread_required",
+                hint: "Pass a thread ID: bb genui board thr_…",
+              });
+            }
+            const versions = await boards.versions(threadId);
+            const newest = versions.at(-1);
+            const content = newest === undefined ? null : await boards.content(threadId, newest.id);
+            if (newest === undefined || content === null) {
+              throw new PluginCliError(`thread ${threadId} has no status board yet`, { code: "no_board" });
+            }
+            const header = `«${newest.title}», version ${versionNumber(versions, newest.id)}, published ${new Date(newest.at).toISOString()}`;
+            return { exitCode: 0, stdout: `${header}\n\n${content}\n` };
+          },
+        }),
+        "show-board": cliCommand({
+          summary: "Put a markdown file with ui and app blocks on a thread's status board, as the show_board tool does",
+          description:
+            "For an agent without the show_board tool. The file is one of the thread's: a workspace path or $BB_THREAD_STORAGE/<name>. Every block is checked first; a failed check stores nothing and exits 1.",
+          options: {
+            title: { type: "string", description: "A few words naming the board; omitted, an update keeps the board's title" },
+            new: { type: "boolean", description: "Start another board instead of adding a version to the one the thread shows" },
+            thread: { type: "string", description: "Thread ID; defaults to the thread running the command" },
+          },
+          positionals: [{ name: "file", description: "The board's file", required: true }],
+          async run(input, ctx) {
+            const threadId = input.options.thread ?? ctx.threadId;
+            if (threadId === undefined) {
+              throw new PluginCliError("no thread to put the board on", {
+                code: "thread_required",
+                hint: "Pass a thread ID: bb genui show-board board.md --thread thr_…",
+              });
+            }
+            const file = await loadThreadFile(bb, threadId, input.positionals.file, { raw: true });
+            if (!file.ok) throw new PluginCliError(file.error, { code: "file_unreadable" });
+            const content = typeof file.value === "string" ? file.value : "";
+            if (content.length > MAX_BOARD_CHARS) {
+              throw new PluginCliError(`the board is ${content.length} characters; the limit is ${MAX_BOARD_CHARS}`, { code: "too_long" });
+            }
+            const title = input.options.title?.trim().slice(0, MAX_BOARD_TITLE_CHARS);
+            const { ok, text } = await publishBoard(threadId, {
+              content,
+              title: title === undefined || title === "" ? null : title,
+              mode: input.options.new === true ? "new" : "update",
+            });
+            return ok ? { exitCode: 0, stdout: `${text}\n` } : { exitCode: 1, stderr: `${text}\n` };
           },
         }),
         render: cliCommand({

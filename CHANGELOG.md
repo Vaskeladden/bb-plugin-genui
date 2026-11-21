@@ -4,6 +4,11 @@ What changed in each version of the Generative UI plugin for BB. Update an insta
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Status board.** `show_board` puts a checked report in a *Status board* tab in the thread's side panel, which opens by itself; every publish is kept as a version, as an update of the board that is there or as a new board. `bb genui show-board <file>` does the same for an agent without the tool, and `bb genui board` prints the current board.
+
 ## [0.3.1] - 2026-10-22
 
 ### Fixed

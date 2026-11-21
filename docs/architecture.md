@@ -606,6 +606,15 @@ pilot stored.
   - `web/`: web lookups (address-checked fetches, Commons search, Wikipedia
     lead photos, Photon, OSM tiles, the cache).
   - `fallback.ts`: renders replies as markdown; `examples.ts`: `ui_examples`.
+  - `board-store.ts`: a thread's status boards (rules in `core/board.ts`):
+    the version list under `board:<thread>`, each version's text under
+    `board:<thread>:<version>`. `show_board` and `bb genui show-board` check
+    every block and publish; a publish is announced on the `board` realtime
+    channel. `ui/BoardTab.tsx` is the side-panel tab (a `threadPanelAction`)
+    and the opener mounted with every visible thread, which opens the tab for
+    a version this browser has not opened it for. A board's blocks are the
+    same `Fence` a reply's are, under the message id `board:<version>`, which
+    BB's outline never lists, so they never count as answered.
 
 ## Develop
 
