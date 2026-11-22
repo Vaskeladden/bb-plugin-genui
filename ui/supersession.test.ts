@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { affectsConversation, hasLaterUserMessage, type OutlineItem } from "./supersession";
+import { affectsConversation, hasLaterUserMessage, isMachineMessage, type OutlineItem } from "./supersession";
 
 // Ids as BB's conversation outline and timeline rows write them.
 const ASK = "thr_a:assistant:kind:assistant|turn:t12|parent:root|item:i20";
@@ -39,9 +39,43 @@ describe("hasLaterUserMessage", () => {
     expect(hasLaterUserMessage([...OUTLINE, stale, { id: "thr_a:user-seed:50", role: "user" }], LATEST)).toBe(true);
   });
 
+  it("keeps a reply open when only machine messages follow it", () => {
+    const outline: OutlineItem[] = [
+      { id: "thr_a:user-seed:1", role: "user" },
+      { id: ASK, role: "assistant" },
+      { id: "thr_a:user-seed:40", role: "user", machine: true },
+      { id: LATEST, role: "assistant" },
+      { id: "thr_a:user-seed:60", role: "user", machine: true },
+    ];
+    expect(hasLaterUserMessage(outline, ASK)).toBe(false);
+    expect(hasLaterUserMessage([...outline, { id: "thr_a:user-seed:70", role: "user" }], ASK)).toBe(true);
+  });
+
   it("is unknown when the outline is not loaded or lacks the reply", () => {
     expect(hasLaterUserMessage(null, ASK)).toBeNull();
     expect(hasLaterUserMessage(OUTLINE, "thr_a:assistant:nested")).toBeNull();
+  });
+});
+
+describe("isMachineMessage", () => {
+  it("knows the messages bb, plugins and other threads send for the user", () => {
+    for (const preview of [
+      "[ci watcher] ✅ CI is green on bb#230 (129615a)",
+      "[run watcher] deploy finished",
+      "[ship keeper] Continue /pr-shipit for this PR.",
+      "[bb system]\n\n@thread:thr_x completed:",
+      "[bb message from thread:thr_73auicgny8] done",
+      "Please continue.",
+      "Give a short status report in exactly this format, then stop",
+    ]) {
+      expect(isMachineMessage(preview), preview).toBe(true);
+    }
+  });
+
+  it("leaves what the user wrote alone", () => {
+    for (const preview of ["shipit", "Hva skal skje? shipit · merge", "go 1,2", "see [the docs](https://x.test) first", "[1] is wrong", ""]) {
+      expect(isMachineMessage(preview), preview).toBe(false);
+    }
   });
 });
 

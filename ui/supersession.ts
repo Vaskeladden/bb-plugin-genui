@@ -5,6 +5,43 @@
 export interface OutlineItem {
   readonly id: string;
   readonly role: "assistant" | "user";
+  /** A user row the user did not write (see `isMachineMessage`): it answers nothing. */
+  readonly machine?: boolean;
+}
+
+/**
+ * A leading «[tag] » marks a message bb, a plugin or another thread sent in
+ * the user's name: «[ci watcher] …», «[run watcher] …», «[ship keeper] …»,
+ * «[bb system] …», «[bb message from thread:…] …».
+ */
+const MACHINE_TAG = /^\s*\[[a-z][^\]\n]{0,80}\]\s/i;
+
+/**
+ * Fixed prompts sent without a tag: bb's retry after a provider error, and
+ * the jb-flow buttons that ask the agent for a report. vaskeladden-bb's ship
+ * keeper keeps the same list (`lib/ship-keeper.ts`) for the same reason.
+ */
+const MACHINE_OPENINGS: readonly string[] = [
+  "Please continue.",
+  "Give a short status report in exactly this format",
+  "Ultrastatus: give me a thorough, checked status report",
+  "What is the real problem here? Explain it to me like I'm a donkey",
+  "⏰ Snooze reminder:",
+  "released: ",
+  "The release merged (",
+];
+
+/**
+ * Whether a user row is a message sent for the user, not written by them,
+ * judged from the start of its text (the outline's `preview`). bb records
+ * plugin messages with the user as initiator, so the text is the only sign.
+ * Such a message is news for the agent, not the user's answer: the questions
+ * before it stay open.
+ */
+export function isMachineMessage(preview: string): boolean {
+  if (MACHINE_TAG.test(preview)) return true;
+  const text = preview.trimStart();
+  return MACHINE_OPENINGS.some((opening) => text.startsWith(opening));
 }
 
 /** A user row's event sequence, from its `<thread>:user-seed:<seq>` id; null for any other id. */
@@ -14,10 +51,10 @@ function userSeq(id: string): number | null {
 }
 
 /**
- * Whether a user message follows the message `anchorId` (the assistant reply
- * holding a block). Null when the anchor is not in the outline, so the
- * caller can keep what it knew: a nested agent's message, or a reply the
- * outline no longer lists.
+ * Whether a message the user wrote follows the message `anchorId` (the
+ * assistant reply holding a block). Machine rows do not count. Null when the
+ * anchor is not in the outline, so the caller can keep what it knew: a nested
+ * agent's message, or a reply the outline no longer lists.
  *
  * A user row whose sequence is below one already seen is out of place, not a
  * reply: BB's outline can list a rejected steer, sent long before, at its end.
@@ -31,7 +68,7 @@ export function hasLaterUserMessage(items: readonly OutlineItem[] | null, anchor
     if (item.role !== "user") continue;
     const seq = userSeq(item.id);
     if (seq !== null && seq < highest) continue;
-    if (index > anchor) return true;
+    if (index > anchor && item.machine !== true) return true;
     if (seq !== null) highest = seq;
   }
   return false;

@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 - Built against `@get-bb/plugin-sdk` 0.6.157 and BB's current slots. The Status board is a thread tab (`experimental_tab`) that a thread header row opens; Changes, Commits and Environments read git state from BB's Git plugin (`bb--git`), which took over the SDK's own status and diff reads. Requires BB 0.50 or later.
 
+### Fixed
+- Questions stay open when a message the user did not write arrives after them. A CI result, a run result, a ship keeper nudge, a `[bb system]` note, a message from another thread, bb's "Please continue." retry or a status-report button used to lock every earlier Form, Button, Plan, Decision and List pick, as if the user had moved on. Now only a message the user wrote closes them. A message counts as sent for the user when it opens with a `[tag] ` or with one of the fixed prompts in `ui/supersession.ts`.
+
 ### Removed
 - The DOM overlay that rendered blocks on BB before the code fence renderer slot. Every BB this version runs on has the slot.
 

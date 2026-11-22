@@ -1,12 +1,13 @@
 // Whether the user has moved on from the reply holding a block: the thread
-// has a user message after it. Every block of a thread shares one outline
+// has a message the user wrote after it (a CI result or another thread's
+// message arriving in between leaves its questions open). Every block of a thread shares one outline
 // read and one realtime subscription; the outline is read again only when a
 // thread event can add or drop a user message, so a streaming reply costs
 // nothing. Works for blocks scrolled out of BB's virtualized timeline too,
 // since it reads the thread from the server, not the DOM.
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
-import { affectsConversation, hasLaterUserMessage, type OutlineItem } from "./supersession";
+import { affectsConversation, hasLaterUserMessage, isMachineMessage, type OutlineItem } from "./supersession";
 
 /** Coalesces the burst of events a send produces into one read. */
 const REFRESH_DELAY_MS = 150;
@@ -111,7 +112,7 @@ class ThreadOutlines {
       .conversationOutline({ threadId, signal: entry.abort.signal })
       .then(
         ({ items }) => {
-          entry.items = items.map(({ id, role }) => ({ id, role }));
+          entry.items = items.map(({ id, role, preview }) => ({ id, role, machine: role === "user" && isMachineMessage(preview) }));
           for (const listener of entry.listeners) listener();
         },
         // A failed read keeps the last outline; the next change reads again. Without one,

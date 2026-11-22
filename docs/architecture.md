@@ -247,8 +247,11 @@ The internals behind [the README](../README.md): how agents learn the language, 
    every staged answer becomes its block's sent answer (several per block,
    kept as `<stateKey>:answers`; a block's single `:answer` from before
    reads as one): a choice folds into one "sent" line, a Form turns
-   read-only with "Sent". Once the thread has a user message after the
-   reply (typed, or sent from anywhere), its open choices go away.
+   read-only with "Sent". Once the thread has a message the user wrote
+   after the reply (typed, or sent from anywhere), its open choices go away.
+   A message sent in the user's name by bb, a plugin or another thread (a
+   leading `[tag]`, or one of the fixed prompts in `isMachineMessage`) is not
+   an answer and leaves them open.
    `ui/useSuperseded.ts` reads that from BB's conversation outline and
    re-reads it only on thread events that can add a user message, so it
    holds for blocks BB has scrolled out of its timeline. A user row whose

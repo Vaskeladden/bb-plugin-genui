@@ -18,10 +18,10 @@ const { rpc, sdk, pictures } = vi.hoisted(() => {
       method === "load_image" ? new Promise((resolve) => pictures.set(params.path ?? "", resolve)) : Promise.resolve({ ok: false, error: "not here" }),
     ),
   };
-  const outlines: Record<string, { items: { id: string; role: "assistant" | "user" }[] }> = {
+  const outlines: Record<string, { items: { id: string; role: "assistant" | "user"; preview: string }[] }> = {
     hold: { items: [] },
-    page: { items: [{ id: "page:assistant:1", role: "assistant" }, { id: "page:user-seed:9", role: "user" }] },
-    later: { items: [{ id: "later:assistant:1", role: "assistant" }, { id: "later:user-seed:4", role: "user" }] },
+    page: { items: [{ id: "page:assistant:1", role: "assistant", preview: "Pick one" }, { id: "page:user-seed:9", role: "user", preview: "the first" }] },
+    later: { items: [{ id: "later:assistant:1", role: "assistant", preview: "Pick one" }, { id: "later:user-seed:4", role: "user", preview: "the first" }] },
   };
   const sdk = {
     subscribe: () => () => {},
