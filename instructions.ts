@@ -57,6 +57,21 @@ Card("Day 1", [Map([{name: "Belém Tower, Lisbon", note: "Opens 9:30"}, {name: "
 \`\`\``;
 
 /**
+ * Contributed after CODE_WORK_INSTRUCTIONS to the sessions of a thread that
+ * has a status board (server.ts keeps which do): the agent keeps the board
+ * current from its own work, so the side panel never waits for the next
+ * Ultrastatus. Such a publish is kind "update", which never counts as an
+ * Ultrastatus: the tab says it was not checked again.
+ */
+export const BOARD_UPKEEP_INSTRUCTIONS = `# This thread's status board
+This thread has a status board in the side panel (show_board; \`bb genui board\` prints it). Keep it current: before you end a turn in which the work moved (a step finished or started, a pull request opened, changed its checks or merged, something went live, a decision was made, the plan changed, a new blocker), or in which the user asked for a status, publish the board again with show_board, mode "update" and kind "update". Skip it when nothing on the board changed, such as a quick answer.
+- Start from the board as it is (\`bb genui board\`, or the version you last published in this session) and change only what this turn changed: the marks of the rows it touched, the bottom line, what is left and the «Next» card's controls. Keep its title, rows, names and order. Add rows for new work; mark a dropped row dropped, never remove it.
+- Write from what you know from your own work; you need not check every row again. A row you learned nothing new about keeps what the board said.
+- Open with one short line on what changed ("Since last time: …").
+- Only an Ultrastatus request checks every row and publishes kind "ultrastatus". Never pass it otherwise, and never call an update an Ultrastatus.
+- Your reply stays as it would have been; don't repeat the board in it.`;
+
+/**
  * Engineering and management work, contributed as its own section
  * (bb.agents.contributeInstructions), which BB places after the tool sections
  * and right before AGENT_INSTRUCTIONS. Says, per kind of tool output, which

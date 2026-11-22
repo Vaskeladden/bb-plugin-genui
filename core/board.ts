@@ -8,6 +8,14 @@ import { findFences } from "./fences";
 /** "update" adds a version to the board the thread shows; "new" starts another board. */
 export type BoardMode = "update" | "new";
 
+/**
+ * What a version is worth. "ultrastatus": a thorough report that checked every
+ * row again, as an Ultrastatus request asks. "update": the agent brought the
+ * board up to date from its own work, without checking every row again. An
+ * update never counts as an Ultrastatus.
+ */
+export type BoardKind = "ultrastatus" | "update";
+
 /** One version of a board, as it was when the agent published it; its text is stored beside it. */
 export interface BoardVersion {
   /** Unique within the thread. */
@@ -23,6 +31,12 @@ export interface BoardVersion {
    * absent on versions stored before boards recorded it.
    */
   readonly chat?: number | null;
+  /** Absent on versions stored before boards recorded it: those were all Ultrastatus reports. */
+  readonly kind?: BoardKind;
+}
+
+export function kindOf(version: BoardVersion): BoardKind {
+  return version.kind ?? "ultrastatus";
 }
 
 export const DEFAULT_BOARD_TITLE = "Status";
@@ -36,11 +50,19 @@ export const MAX_BOARD_VERSIONS = 30;
  * The thread's versions, oldest first, after publishing one more, and the ids
  * that fell out of the history. An update joins the newest version's board and
  * keeps its title unless one is given; the first version of a thread, or mode
- * "new", starts a board.
+ * "new", starts a board. A full history drops its oldest kind "update" first,
+ * so the frequent small updates never push the Ultrastatus reports out.
  */
 export function withVersion(
   versions: readonly BoardVersion[],
-  published: { readonly id: string; readonly title: string | null; readonly mode: BoardMode; readonly at: number; readonly chat: number | null },
+  published: {
+    readonly id: string;
+    readonly title: string | null;
+    readonly mode: BoardMode;
+    readonly kind: BoardKind;
+    readonly at: number;
+    readonly chat: number | null;
+  },
 ): { readonly versions: BoardVersion[]; readonly added: BoardVersion; readonly dropped: string[] } {
   const newest = versions.at(-1);
   const joins = published.mode === "update" && newest !== undefined;
@@ -50,10 +72,22 @@ export function withVersion(
     title: published.title ?? (joins ? newest.title : DEFAULT_BOARD_TITLE),
     at: published.at,
     chat: published.chat,
+    kind: published.kind,
   };
-  const all = [...versions, added];
-  const kept = all.slice(-MAX_BOARD_VERSIONS);
-  return { versions: kept, added, dropped: all.slice(0, all.length - kept.length).map((version) => version.id) };
+  const kept = [...versions, added];
+  const dropped: string[] = [];
+  while (kept.length > MAX_BOARD_VERSIONS) {
+    // The version just added always stays.
+    const update = kept.findIndex((version, index) => index < kept.length - 1 && kindOf(version) === "update");
+    dropped.push(...kept.splice(update === -1 ? 0 : update, 1).map((version) => version.id));
+  }
+  return { versions: kept, added, dropped };
+}
+
+/** The newest Ultrastatus version of the board `version` belongs to, up to and including it; null when the history keeps none. */
+export function lastUltrastatus(versions: readonly BoardVersion[], version: BoardVersion): BoardVersion | null {
+  const upTo = versions.slice(0, versions.findIndex((candidate) => candidate.id === version.id) + 1);
+  return [...upTo].reverse().find((candidate) => candidate.board === version.board && kindOf(candidate) === "ultrastatus") ?? null;
 }
 
 /** Which version of its board this one is, counted from 1 among the versions still kept. */
@@ -134,7 +168,8 @@ export function boardOrigin(threadId: string, versions: readonly BoardVersion[],
   const newer = newest.id === id ? "" : newest.board === version.board ? `, not the newest (version ${versionNumber(versions, newest.id)} is)` : ", an earlier board";
   const link = chatLink(threadId, version);
   const made = link === null ? "" : `, made at ${link}`;
-  return `From the status board «${version.title}», version ${number} of ${published}${newer}${made} (\`bb genui board --version ${id}\` prints it):`;
+  const kind = kindOf(version) === "update" ? " (an update, not checked again)" : "";
+  return `From the status board «${version.title}», version ${number}${kind} of ${published}${newer}${made} (\`bb genui board --version ${id}\` prints it):`;
 }
 
 /** What a publish announces on the realtime channel; null for anything else on it. */
