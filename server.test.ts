@@ -91,8 +91,8 @@ describe("the status board", () => {
     // The earlier version is still what it was.
     expect((await get(newest.versions[0]!.id)).shown?.content).toBe(report("first"));
     expect(host.harness.realtimeSignals).toEqual([
-      { channel: "board", payload: { threadId: ctx.threadId, id: newest.versions[0]?.id } },
-      { channel: "board", payload: { threadId: ctx.threadId, id: newest.versions[1]?.id } },
+      { channel: "board", payload: { threadId: ctx.threadId, id: newest.versions[0]?.id, kind: "update" } },
+      { channel: "board", payload: { threadId: ctx.threadId, id: newest.versions[1]?.id, kind: "update" } },
     ]);
 
     const cli = await host.harness.runCli(["board"], { threadId: ctx.threadId });
@@ -151,16 +151,58 @@ describe("the status board", () => {
     expect(cli.stdout).toContain("«Launch», version 1 (an Ultrastatus), published");
   });
 
-  it("tells the agent of a thread with a board to keep it current, and no other thread", async () => {
+  it("tells the agent of a thread without a board to make one, and of a thread with one to keep it current", async () => {
     const { show, host } = await start();
     const configure = host.harness.registrations.agentConfigurationProvider!;
     const instructionsFor = host.harness.registrations.instructionProvider!;
     configure(session(ctx.threadId));
     configure(session("thr_other"));
-    expect(instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId })).not.toContain("This thread's status board");
+    const before = instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId });
+    expect(before).toContain("This thread has none yet");
+    expect(before).not.toContain("This thread has a status board");
     await show({ content: report("first") });
-    expect(instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId })).toContain("This thread's status board");
-    expect(instructionsFor({ threadId: "thr_other", projectId: ctx.projectId })).not.toContain("This thread's status board");
+    expect(instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId })).toContain("This thread has a status board");
+    expect(instructionsFor({ threadId: "thr_other", projectId: ctx.projectId })).toContain("This thread has none yet");
+  });
+
+  it("asks a thread without a board for its first one, once, and only when that makes sense", async () => {
+    const { show, host } = await start();
+    const thread = { status: "idle", archivedAt: null as number | null };
+    host.harness.sdk.stub("threads.get", async () => thread);
+    host.harness.sdk.stub("threads.send", async () => undefined);
+    const events = [{ seq: 4, type: "item/completed", data: { item: { type: "agentMessage" } } }];
+    host.harness.sdk.stub("threads.events.list", async () => events);
+    const begin = (force = false) => host.harness.callRpc("board_start", { threadId: ctx.threadId, force });
+
+    thread.archivedAt = 1;
+    expect(await begin()).toEqual({ status: "archived" });
+    thread.archivedAt = null;
+    thread.status = "running";
+    expect(await begin()).toEqual({ status: "busy" });
+    thread.status = "idle";
+    events.length = 0;
+    expect(await begin()).toEqual({ status: "no-history" });
+    expect(host.harness.sdk.callsTo("threads.send")).toEqual([]);
+
+    events.push({ seq: 4, type: "item/completed", data: { item: { type: "agentMessage" } } });
+    expect(await begin()).toEqual({ status: "asked" });
+    expect(host.harness.sdk.callsTo("threads.send").at(-1)?.[0]).toMatchObject({
+      threadId: ctx.threadId,
+      mode: "queue-if-active",
+      input: [{ type: "text", text: expect.stringContaining("[status board] This thread has no status board yet") }],
+    });
+    // Asked once: opening the tab again asks nothing more, unless the user presses Make it now.
+    expect(await begin()).toEqual({ status: "already-asked" });
+    expect(await begin(true)).toEqual({ status: "asked" });
+    expect(host.harness.sdk.callsTo("threads.send")).toHaveLength(2);
+
+    await show({ content: report("first") });
+    expect(await begin(true)).toEqual({ status: "has-board" });
+
+    host.harness.sdk.stub("threads.get", async () => {
+      throw new Error("thread not found");
+    });
+    expect(await host.harness.callRpc("board_start", { threadId: "thr_gone", force: false })).toEqual({ status: "failed", message: "thread not found" });
   });
 
   it("gives every board the plain-words layout, with the tool and without it", async () => {
@@ -178,7 +220,7 @@ describe("the status board", () => {
     await plugin(host.bb);
     await new Promise((resolve) => setTimeout(resolve, 0));
     host.harness.registrations.agentConfigurationProvider!(session("thr_kept"));
-    expect(host.harness.registrations.instructionProvider!({ threadId: "thr_kept", projectId: ctx.projectId })).toContain("This thread's status board");
+    expect(host.harness.registrations.instructionProvider!({ threadId: "thr_kept", projectId: ctx.projectId })).toContain("This thread has a status board");
   });
 
   it("starts another board on mode «new» and leaves the old one in the history", async () => {

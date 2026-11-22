@@ -78,19 +78,33 @@ Write every board, Ultrastatus or update, so someone who does not code sees in o
 Words: donkey language. Very short sentences, one idea each, everyday words. Name each part by what it does for the user, never by its code name. No commit hashes, pull request or issue numbers, ids, file or function names, branch names or test names in the prose. Proof goes in a cell's note or a Details at the bottom. No paragraph longer than three sentences. Write in the language the user writes in.`;
 
 /**
- * Contributed after CODE_WORK_INSTRUCTIONS to the sessions of a thread that
- * has a status board (server.ts keeps which do): the agent keeps the board
- * current from its own work, so the side panel never waits for the next
- * Ultrastatus. Such a publish is kind "update", which never counts as an
- * Ultrastatus: the tab says it was not checked again.
+ * Contributed after CODE_WORK_INSTRUCTIONS to every session a person reads:
+ * every thread has a status board, its standard view. A thread without one
+ * gets it in this turn, early, so the side panel shows where the work stands
+ * from the first prompt on; a thread with one keeps it current. Such a publish
+ * is kind "update", which never counts as an Ultrastatus: the tab says it was
+ * not checked again. An Ultrastatus resets the board to what is really true.
  */
-export const BOARD_UPKEEP_INSTRUCTIONS = `# This thread's status board
-This thread has a status board in the side panel (show_board; \`bb genui board\` prints it). Keep it current: before you end a turn in which the work moved (a step finished or started, a pull request opened, changed its checks or merged, something went live, a decision was made, the plan changed, a new blocker), or in which the user asked for a status, publish the board again with show_board, mode "update" and kind "update". Skip it when nothing on the board changed, such as a quick answer.
+const BOARD_KEEP = `Keep it current: before you end a turn in which the work moved (a step finished or started, a pull request opened, changed its checks or merged, something went live, a decision was made, the plan changed, a new blocker), or in which the user asked for a status, publish the board again with show_board, mode "update" and kind "update". Skip it when nothing on the board changed, such as a quick answer.
 - Start from the board as it is (\`bb genui board\`, or the version you last published in this session) and change only what this turn changed: the «In plain words» lines, the marks of the rows it touched, what is left and the «Next» card's controls. Keep its title, rows, names and order. Add rows for new work; mark a dropped row dropped, never remove it. A board written before the board layout gets that layout now.
 - Write from what you know from your own work; you need not check every row again. A row you learned nothing new about keeps what the board said.
 - «What changed since last time» says what this turn changed, in plain words.
 - Only an Ultrastatus request checks every row and publishes kind "ultrastatus". Never pass it otherwise, and never call an update an Ultrastatus.
 - Your reply stays as it would have been; don't repeat the board in it.`;
+
+export const BOARD_UPKEEP_INSTRUCTIONS = `# This thread's status board
+This thread has a status board in the side panel (show_board; \`bb genui board\` prints it): the user's standard view of how the work is going. ${BOARD_KEEP}`;
+
+export const BOARD_START_INSTRUCTIONS = `# This thread's status board
+Every thread has a status board in the side panel (show_board; \`bb genui board\` prints it): the user's standard view of how the work is going. This thread has none yet, unless you published one in this session. Make it in this turn: as soon as you understand what the user wants, before long work, publish a first board with show_board, mode "update" and kind "update", in the status board layout. Write it from what you know; a new thread's board is short (the goal, the parts you see, what you do first). If the thread already has history, build it from that history.
+Then: ${BOARD_KEEP}`;
+
+/**
+ * What the board plugin sends once to an idle thread that has history but no
+ * board, when its board tab is first shown (server.ts, board_start). Tagged,
+ * so other plugins read it as a machine message, not the user writing.
+ */
+export const BOARD_START_REQUEST = `[status board] This thread has no status board yet. Make one now from what you already know of this thread (read back with \`bb thread log --self\` if earlier parts were summarized away): publish it with show_board, mode "update" and kind "update", in the status board layout. Don't check every row again and don't change anything else. In your reply, say only that the board is there.`;
 
 /**
  * Engineering and management work, contributed as its own section

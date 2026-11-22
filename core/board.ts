@@ -172,9 +172,10 @@ export function boardOrigin(threadId: string, versions: readonly BoardVersion[],
   return `From the status board «${version.title}», version ${number}${kind} of ${published}${newer}${made} (\`bb genui board --version ${id}\` prints it):`;
 }
 
-/** What a publish announces on the realtime channel; null for anything else on it. */
-export function boardSignal(payload: unknown): { readonly threadId: string; readonly id: string } | null {
+/** What a publish announces on the realtime channel; null for anything else on it. A signal without a kind reads as an Ultrastatus. */
+export function boardSignal(payload: unknown): { readonly threadId: string; readonly id: string; readonly kind: BoardKind } | null {
   if (typeof payload !== "object" || payload === null) return null;
-  const { threadId, id } = payload as { threadId?: unknown; id?: unknown };
-  return typeof threadId === "string" && typeof id === "string" ? { threadId, id } : null;
+  const { threadId, id, kind } = payload as { threadId?: unknown; id?: unknown; kind?: unknown };
+  if (typeof threadId !== "string" || typeof id !== "string") return null;
+  return { threadId, id, kind: kind === "update" ? "update" : "ultrastatus" };
 }

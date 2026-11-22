@@ -5,6 +5,8 @@ import {
   AGENT_INSTRUCTIONS,
   AGENT_INSTRUCTIONS_WEB_OFF,
   BOARD_LAYOUT,
+  BOARD_START_INSTRUCTIONS,
+  BOARD_START_REQUEST,
   BOARD_UPKEEP_INSTRUCTIONS,
   CODE_WORK_INSTRUCTIONS,
   UI_REFERENCE,
@@ -20,6 +22,8 @@ describe("agent instructions", () => {
     expect(AGENT_INSTRUCTIONS_WEB_OFF.length).toBeLessThanOrEqual(4096);
     expect(CODE_WORK_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
     expect(BOARD_UPKEEP_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
+    expect(BOARD_START_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
+    expect(BOARD_START_REQUEST.length).toBeLessThanOrEqual(4096);
     expect(BOARD_LAYOUT.length).toBeLessThanOrEqual(4096);
     expect(UI_REFERENCE.length).toBeLessThanOrEqual(4096);
     expect(UI_REFERENCE_MORE.length).toBeLessThanOrEqual(4096);

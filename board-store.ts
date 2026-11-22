@@ -60,7 +60,7 @@ export function createBoardStore(bb: Pick<BbPluginApi, "storage" | "realtime">, 
       await bb.storage.kv.set(contentKey(threadId, next.added.id), { content });
       await bb.storage.kv.set(listKey(threadId), next.versions);
       await Promise.all(next.dropped.map((id) => bb.storage.kv.delete(contentKey(threadId, id))));
-      bb.realtime.publish(BOARD_CHANNEL, { threadId, id: next.added.id });
+      bb.realtime.publish(BOARD_CHANNEL, { threadId, id: next.added.id, kind });
       return { added: next.added, versions: next.versions };
     },
   };

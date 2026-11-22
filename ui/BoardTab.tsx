@@ -2,9 +2,12 @@
 // agent published with show_board (board-store.ts), rendered as a reply would
 // be: prose as markdown, each ```ui and ```app block live. Every version stays
 // in the picker, so a board is a point in time the user can go back to.
-// BoardOpener, mounted with every visible thread (a thread header row that
-// takes no space), opens the tab when a version the user hasn't seen is
-// published.
+// The tab is always there (a fixed tab): every thread has a board, which its
+// agent makes in its first turn and keeps current (instructions.ts). A thread
+// from before that gets its first board when the tab is first shown
+// (board_start). BoardOpener, mounted with every visible thread (a thread
+// header row that takes no space), makes the board the view a thread opens
+// on, and opens it again when an Ultrastatus lands.
 //
 // The board is where the user goes on with the work, not only where they read
 // it: Update and New board ask the agent for a fresh report, and what the user
@@ -19,9 +22,10 @@ import {
   useRealtime,
   useRpc,
   type ExperimentalTabReference,
-  type ExperimentalThreadActionTabProps,
   type ExperimentalThreadHeaderRowProps,
+  type ExperimentalThreadTabProps,
 } from "@get-bb/plugin-sdk/app";
+import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { BOARD_CHANNEL } from "../board-channel";
 import { boardOrigin, boardSegments, boardSignal, kindOf, lastUltrastatus, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
@@ -32,10 +36,10 @@ import { flushAnswers, sheetFor } from "./answerSheet";
 import { useMotionScope } from "./components/motion";
 
 /**
- * The tab as registered and as opened: an action tab of a thread's side panel.
- * The id is the one the tab had under bb's earlier panel-action slot, so tabs bb saved keep theirs.
+ * The tab as registered and as opened: a fixed tab of every thread's side
+ * panel, since every thread has a board.
  */
-export const BOARD_TAB = { id: "board", context: { kind: "thread" }, availability: "action" } as const satisfies ExperimentalTabReference;
+export const BOARD_TAB = { id: "board", context: { kind: "thread" }, availability: "fixed" } as const satisfies ExperimentalTabReference;
 export const BOARD_TITLE = "Status board";
 
 /** How often the header's age is refreshed. */
@@ -56,8 +60,18 @@ type Asked =
   | { readonly status: "asked"; readonly mode: BoardMode }
   | { readonly status: "failed"; readonly message: string };
 
+/** What became of asking the agent for a thread's first board. */
+type Started =
+  | { readonly status: "idle" }
+  | { readonly status: "asking" }
+  | { readonly status: "done"; readonly result: "asked" | "has-board" | "already-asked" | "busy" | "no-history" | "archived" }
+  | { readonly status: "failed"; readonly message: string };
+
 const BUTTON =
   "min-h-10 cursor-pointer rounded-md border border-border px-3 text-xs font-medium hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
+/** The header's buttons: small, so the header stays one thin row. */
+const SMALL_BUTTON =
+  "inline-flex min-h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-xs font-medium hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
 const PRIMARY_BUTTON =
   "min-h-10 cursor-pointer rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50";
 
@@ -72,7 +86,7 @@ function useNow(): number {
   return now;
 }
 
-export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactElement {
+export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement {
   const rpc = useRpc<typeof rpcContract>();
   const motion = useMotionScope();
   const now = useNow();
@@ -82,6 +96,7 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
   const [board, setBoard] = useState<Board | null>(null);
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [asked, setAsked] = useState<Asked>({ status: "idle" });
+  const [started, setStarted] = useState<Started>({ status: "idle" });
 
   useRealtime(BOARD_CHANNEL, (payload) => {
     if (boardSignal(payload)?.threadId !== threadId) return;
@@ -101,6 +116,23 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
     },
     [rpc, threadId],
   );
+
+  const start = useCallback(
+    (force: boolean) => {
+      setStarted({ status: "asking" });
+      rpc.call("board_start", { threadId, force }).then(
+        (result) => setStarted(result.status === "failed" ? { status: "failed", message: result.message ?? "unknown error" } : { status: "done", result: result.status }),
+        (cause: unknown) => setStarted({ status: "failed", message: messageOf(cause) }),
+      );
+    },
+    [rpc, threadId],
+  );
+
+  const empty = load.status === "ready" && board !== null && board.versions.length === 0;
+  // A thread from before every thread had a board: ask its agent for one, once (the server remembers).
+  useEffect(() => {
+    if (empty) start(false);
+  }, [empty, start]);
 
   useEffect(() => {
     let live = true;
@@ -131,10 +163,22 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
   else
     body = (
       <div className="flex flex-col items-start gap-3">
-        <Notice>No status board yet. Run Ultrastatus in this thread and its report lands here.</Notice>
-        <button type="button" disabled={asked.status === "asking"} onClick={() => request("new")} className={PRIMARY_BUTTON}>
-          Run Ultrastatus
-        </button>
+        <Notice>No status board yet. The agent makes one in its next turn, from what it knows of this thread.</Notice>
+        <StartNote started={started} />
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={started.status === "asking"} onClick={() => start(true)} className={PRIMARY_BUTTON}>
+            Make it now
+          </button>
+          <button
+            type="button"
+            disabled={asked.status === "asking"}
+            onClick={() => request("new")}
+            title="Ask the agent to check every part of the work again and make the board from that"
+            className={BUTTON}
+          >
+            Run Ultrastatus
+          </button>
+        </div>
         <RequestNote asked={asked} />
       </div>
     );
@@ -142,59 +186,67 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
   return (
     <div {...motion} className="@container flex h-full min-h-0 flex-col bg-background text-foreground">
       {version !== undefined && board !== null && newest !== undefined && (
-        <header className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
-          {/* The title keeps at least 15rem: the version picker's options are long, and a picker at its natural
-              width once squeezed the title to one letter per line. Side by side only from @2xl. */}
-          <div className="min-w-0 @2xl:min-w-60 @2xl:flex-1">
-            <h2 className="m-0 line-clamp-2 text-sm font-semibold">{version.title}</h2>
-            <p className="m-0 text-xs text-muted-foreground">
-              Version {versionNumber(board.versions, version.id)} · {relativeTime(version.at, now)}
-              <KindNote versions={board.versions} version={version} now={now} />
-              {version.id !== newest.id && <span className="ml-1.5 rounded bg-state-hover px-1.5 py-0.5 font-medium text-foreground">Earlier version</span>}
-              {load.status === "failed" && <span className="ml-1.5 text-destructive">Couldn&apos;t refresh: {load.message}</span>}
+        <header className="shrink-0 border-b border-border px-3 py-1.5">
+          {/* One thin row: title, version and age, then small buttons; it wraps on a narrow panel. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="m-0 flex min-w-0 flex-1 basis-48 items-baseline gap-1.5 text-xs text-muted-foreground">
+              <span className="min-w-0 truncate text-sm font-semibold text-foreground" title={version.title}>
+                {version.title}
+              </span>
+              <span className="shrink-0 whitespace-nowrap">
+                v{versionNumber(board.versions, version.id)} · {relativeTime(version.at, now)}
+              </span>
             </p>
-            <RequestNote asked={asked} />
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2 @2xl:justify-end">
-            <button
-              type="button"
-              disabled={asked.status === "asking"}
-              onClick={() => request("update")}
-              title="Ask the agent for a fresh Ultrastatus as the next version of this board"
-              className={PRIMARY_BUTTON}
-            >
-              Update
-            </button>
-            <button
-              type="button"
-              disabled={asked.status === "asking"}
-              onClick={() => request("new")}
-              title="Ask the agent for a fresh Ultrastatus as a new board; this one stays in the history"
-              className={BUTTON}
-            >
-              New board
-            </button>
-            {version.id !== newest.id && (
-              <button type="button" onClick={() => setPicked(null)} className={BUTTON}>
-                Latest
-              </button>
-            )}
-            {board.versions.length > 1 && (
-              <select
-                aria-label="Version"
-                value={version.id}
-                onChange={(event) => setPicked(event.target.value === newest.id ? null : event.target.value)}
-                className="min-h-10 min-w-0 max-w-full flex-1 cursor-pointer truncate rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring @2xl:max-w-72 @2xl:flex-none"
+            <div className="flex min-w-0 items-center gap-1">
+              {version.id !== newest.id && (
+                <button type="button" onClick={() => setPicked(null)} className={SMALL_BUTTON}>
+                  Latest
+                </button>
+              )}
+              {board.versions.length > 1 && (
+                <select
+                  aria-label="Version"
+                  value={version.id}
+                  onChange={(event) => setPicked(event.target.value === newest.id ? null : event.target.value)}
+                  className="h-8 w-24 min-w-0 cursor-pointer truncate rounded-md border border-border bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring @md:w-40"
+                >
+                  {[...board.versions].reverse().map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      v{versionNumber(board.versions, candidate.id)} · {TIME.format(candidate.at)} · {candidate.title}
+                      {kindOf(candidate) === "ultrastatus" ? " · Ultrastatus" : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                disabled={asked.status === "asking"}
+                onClick={() => request("update")}
+                title="Ultrastatus: the agent checks every part of the work again and brings this board in line with what is really done"
+                className={SMALL_BUTTON}
               >
-                {[...board.versions].reverse().map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {TIME.format(candidate.at)} · {candidate.title} v{versionNumber(board.versions, candidate.id)}
-                    {kindOf(candidate) === "ultrastatus" ? " · Ultrastatus" : ""}
-                  </option>
-                ))}
-              </select>
-            )}
+                <Icon name="RefreshCw" className="size-3.5" />
+                Ultrastatus
+              </button>
+              <button
+                type="button"
+                disabled={asked.status === "asking"}
+                onClick={() => request("new")}
+                title="New board: a fresh Ultrastatus that starts the board over; this one stays in the history"
+                aria-label="New board"
+                className={SMALL_BUTTON}
+              >
+                <Icon name="Plus" className="size-3.5" />
+                <span className="hidden @md:inline">New board</span>
+              </button>
+            </div>
           </div>
+          <p className="m-0 text-[11px] leading-4 text-muted-foreground">
+            <KindNote versions={board.versions} version={version} now={now} />
+            {version.id !== newest.id && <span className="ml-1.5 rounded bg-state-hover px-1 font-medium text-foreground">Earlier version</span>}
+            {load.status === "failed" && <span className="ml-1.5 text-destructive">Couldn&apos;t refresh: {load.message}</span>}
+          </p>
+          <RequestNote asked={asked} />
         </header>
       )}
       <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3")}>{body}</div>
@@ -217,6 +269,34 @@ function RequestNote({ asked }: { asked: Asked }): ReactElement | null {
   return (
     <p role="status" className="m-0 mt-1 text-xs text-muted-foreground">
       {asked.status === "asking" ? `Asking for ${what}…` : `Asked the agent for ${what}. It shows here when the report is ready.`}
+    </p>
+  );
+}
+
+/** What became of asking for the thread's first board; nothing until it was asked. */
+function StartNote({ started }: { started: Started }): ReactElement | null {
+  if (started.status === "idle") return null;
+  if (started.status === "failed") {
+    return (
+      <p role="alert" className="m-0 text-xs text-destructive">
+        Couldn&apos;t ask for a board: {started.message}
+      </p>
+    );
+  }
+  const text =
+    started.status === "asking"
+      ? "Asking the agent for a board…"
+      : {
+          asked: "Asked the agent for a board. It shows here when it is ready.",
+          "has-board": "The board is there; loading it…",
+          "already-asked": "The agent was already asked for a board. Press Make it now to ask again.",
+          busy: "The agent is working now and makes the board before its turn ends.",
+          "no-history": "Nothing has happened in this thread yet. The board comes with the first message.",
+          archived: "This thread is archived, so no board was asked for.",
+        }[started.result];
+  return (
+    <p role="status" className="m-0 text-xs text-muted-foreground">
+      {text}
     </p>
   );
 }
@@ -279,12 +359,12 @@ function BoardAnswers({ threadId }: { threadId: string }): ReactElement | null {
  */
 function KindNote({ versions, version, now }: { versions: readonly BoardVersion[]; version: BoardVersion; now: number }): ReactElement {
   if (kindOf(version) === "ultrastatus") {
-    return <span className="ml-1.5 rounded bg-state-hover px-1.5 py-0.5 font-medium text-foreground">Ultrastatus</span>;
+    return <span className="rounded bg-state-hover px-1 font-medium text-foreground">Ultrastatus: every part checked</span>;
   }
   const checked = lastUltrastatus(versions, version);
   return (
-    <span className="ml-1.5" title="The agent updated the board from its own work, without checking every row again. Only an Ultrastatus checks them all.">
-      · Update, not checked again · {checked === null ? "no Ultrastatus in the history" : `last Ultrastatus ${relativeTime(checked.at, now)}`}
+    <span title="The agent updated the board from its own work, without checking every row again. Only an Ultrastatus checks them all.">
+      Update, not checked again · {checked === null ? "no Ultrastatus in the history" : `last Ultrastatus ${relativeTime(checked.at, now)}`}
     </span>
   );
 }
@@ -344,42 +424,30 @@ function markSeen(threadId: string, id: string): void {
   }
 }
 
+/** Threads whose board this page load already opened on: the board is the view a thread opens on, once. */
+const openedOnArrival = new Set<string>();
+
 /**
- * Opens the thread's Status board tab for a version this browser hasn't
- * opened it for: one published while the thread is on screen, or found when
- * the thread is opened. Renders nothing.
+ * Makes the Status board the view a thread opens on (once per thread per page
+ * load, so a user who moves to another tab keeps it), and opens it again when
+ * an Ultrastatus this browser hasn't shown lands. The agent's own updates,
+ * published every turn, don't pull the user away from another tab. Renders
+ * nothing.
  */
 export function BoardOpener({ threadId }: ExperimentalThreadHeaderRowProps): null {
-  const rpc = useRpc<typeof rpcContract>();
   // The side panel of the thread this row is mounted in.
   const panel = experimental_useAppPanel();
-  const open = useCallback(
-    (id: string) => {
-      if (lastSeen(threadId) === id) return;
-      if (panel.openTab({ tab: BOARD_TAB })) markSeen(threadId, id);
-    },
-    [panel, threadId],
-  );
 
   useRealtime(BOARD_CHANNEL, (payload) => {
     const signal = boardSignal(payload);
-    if (signal?.threadId === threadId) open(signal.id);
+    if (signal?.threadId !== threadId || signal.kind !== "ultrastatus" || lastSeen(threadId) === signal.id) return;
+    if (panel.openTab({ tab: BOARD_TAB })) markSeen(threadId, signal.id);
   });
 
   useEffect(() => {
-    let live = true;
-    rpc.call("board_get", { threadId, id: null }).then(
-      ({ versions }) => {
-        const newest = versions.at(-1);
-        if (live && newest !== undefined) open(newest.id);
-      },
-      // The tab itself reports a board that can't be read.
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, [rpc, threadId, open]);
+    if (openedOnArrival.has(threadId)) return;
+    if (panel.openTab({ tab: BOARD_TAB })) openedOnArrival.add(threadId);
+  }, [panel, threadId]);
 
   return null;
 }

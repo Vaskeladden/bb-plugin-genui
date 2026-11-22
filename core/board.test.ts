@@ -184,8 +184,10 @@ describe("the newest chat message among a thread's events", () => {
 });
 
 describe("a publish's announcement", () => {
-  it("names the thread and the version", () => {
-    expect(boardSignal({ threadId: "thr_1", id: "abc" })).toEqual({ threadId: "thr_1", id: "abc" });
+  it("names the thread, the version and its kind; an announcement without a kind is an Ultrastatus", () => {
+    expect(boardSignal({ threadId: "thr_1", id: "abc", kind: "update" })).toEqual({ threadId: "thr_1", id: "abc", kind: "update" });
+    expect(boardSignal({ threadId: "thr_1", id: "abc", kind: "ultrastatus" })).toEqual({ threadId: "thr_1", id: "abc", kind: "ultrastatus" });
+    expect(boardSignal({ threadId: "thr_1", id: "abc" })).toEqual({ threadId: "thr_1", id: "abc", kind: "ultrastatus" });
   });
 
   it("is nothing for another payload", () => {

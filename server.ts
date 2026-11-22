@@ -72,6 +72,8 @@ import {
   AGENT_INSTRUCTIONS,
   AGENT_INSTRUCTIONS_WEB_OFF,
   BOARD_LAYOUT,
+  BOARD_START_INSTRUCTIONS,
+  BOARD_START_REQUEST,
   BOARD_UPKEEP_INSTRUCTIONS,
   CODE_WORK_INSTRUCTIONS,
   UI_REFERENCE,
@@ -257,6 +259,13 @@ export const rpcContract = defineRpcContract({
       shown: z.object({ id: z.string(), content: z.string() }).nullable(),
     }),
   },
+  // Shown a thread without a board: asks its agent once for one, when the
+  // thread is idle, not archived and has history (a new thread's agent makes
+  // its board in its first turn). `force` (the tab's button) asks again.
+  board_start: {
+    input: z.object({ threadId: projectThread, force: z.boolean() }),
+    output: z.object({ status: z.enum(["asked", "has-board", "already-asked", "busy", "no-history", "archived", "failed"]), message: z.string().optional() }),
+  },
   // The board's own Update and New board buttons: asks the thread's agent for
   // a fresh Ultrastatus that lands on the board. The report prompt belongs to
   // the JB Flow plugin, so this passes the request on to it; `ok` false says
@@ -392,7 +401,7 @@ export default async function plugin(bb: BbPluginApi) {
     name: "show_board",
     instructions: BOARD_LAYOUT,
     description:
-      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel, and to keep a board this thread already has current: before you end a turn in which the work moved, publish it again with kind \"update\", changing only what that turn changed. Pass kind \"ultrastatus\" only for an Ultrastatus request, which checks every row again; an update never counts as one. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
+      "Puts a report on this thread's status board: a tab in the thread's side panel, the user's standard view of how the work is going, where a reply would scroll away. Every thread has one: make it in a thread's first turn, and keep it current: before you end a turn in which the work moved, publish it again with kind \"update\", changing only what that turn changed. Use it too when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. Pass kind \"ultrastatus\" only for an Ultrastatus request, which checks every row again; an update never counts as one. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
     parameters: z.object({
       content: z.string().min(1).max(MAX_BOARD_CHARS).describe("The board: markdown with ```ui and ```app blocks, as a reply would hold them"),
       title: z.string().min(1).max(MAX_BOARD_TITLE_CHARS).optional().describe("A few words naming the board; omitted, an update keeps the board's title"),
@@ -433,9 +442,10 @@ export default async function plugin(bb: BbPluginApi) {
     const instructions = web.isOn() ? AGENT_INSTRUCTIONS : AGENT_INSTRUCTIONS_WEB_OFF;
     return { tools: ["check_ui", "ui_examples", "show_board"], skills: [], instructions };
   });
+  // Every thread a person reads has a status board: one without is told to make it in this turn.
   bb.agents.contributeInstructions(({ threadId }) => {
     if (!personThreads.has(threadId)) return null;
-    return boardThreads.has(threadId) ? `${CODE_WORK_INSTRUCTIONS}\n\n${BOARD_UPKEEP_INSTRUCTIONS}` : CODE_WORK_INSTRUCTIONS;
+    return `${CODE_WORK_INSTRUCTIONS}\n\n${boardThreads.has(threadId) ? BOARD_UPKEEP_INSTRUCTIONS : BOARD_START_INSTRUCTIONS}`;
   });
 
   bb.rpc.register(rpcContract, {
@@ -492,6 +502,23 @@ export default async function plugin(bb: BbPluginApi) {
       const shownId = id ?? versions.at(-1)?.id ?? null;
       const content = shownId === null ? null : await boards.content(threadId, shownId);
       return { versions, shown: shownId === null || content === null ? null : { id: shownId, content } };
+    },
+    async board_start({ threadId, force }) {
+      if ((await boards.versions(threadId)).length > 0) return { status: "has-board" as const };
+      const askedKey = `boardStart:${threadId}`;
+      if (!force && (await bb.storage.kv.get(askedKey)) !== undefined) return { status: "already-asked" as const };
+      try {
+        const thread = await bb.sdk.threads.get({ threadId });
+        if (thread.archivedAt !== null) return { status: "archived" as const };
+        // A running agent makes or keeps its board before the turn ends, as its instructions say.
+        if (!force && thread.status !== "idle") return { status: "busy" as const };
+        if ((await newestChatMessage(threadId)) === null) return { status: "no-history" as const };
+        await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: BOARD_START_REQUEST, mentions: [] }] });
+        await bb.storage.kv.set(askedKey, { at: Date.now() });
+        return { status: "asked" as const };
+      } catch (cause) {
+        return { status: "failed" as const, message: cause instanceof Error ? cause.message : String(cause) };
+      }
     },
     async board_request({ threadId, mode }) {
       try {
