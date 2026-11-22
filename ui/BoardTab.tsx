@@ -142,8 +142,10 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
   return (
     <div {...motion} className="@container flex h-full min-h-0 flex-col bg-background text-foreground">
       {version !== undefined && board !== null && newest !== undefined && (
-        <header className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3 @md:flex-row @md:items-center @md:justify-between">
-          <div className="min-w-0">
+        <header className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
+          {/* The title keeps at least 15rem: the version picker's options are long, and a picker at its natural
+              width once squeezed the title to one letter per line. Side by side only from @2xl. */}
+          <div className="min-w-0 @2xl:min-w-60 @2xl:flex-1">
             <h2 className="m-0 line-clamp-2 text-sm font-semibold">{version.title}</h2>
             <p className="m-0 text-xs text-muted-foreground">
               Version {versionNumber(board.versions, version.id)} · {relativeTime(version.at, now)}
@@ -153,7 +155,7 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
             </p>
             <RequestNote asked={asked} />
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 @2xl:justify-end">
             <button
               type="button"
               disabled={asked.status === "asking"}
@@ -182,7 +184,7 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
                 aria-label="Version"
                 value={version.id}
                 onChange={(event) => setPicked(event.target.value === newest.id ? null : event.target.value)}
-                className="min-h-10 min-w-0 flex-1 cursor-pointer rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring @md:flex-none"
+                className="min-h-10 min-w-0 max-w-full flex-1 cursor-pointer truncate rounded-md border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring @2xl:max-w-72 @2xl:flex-none"
               >
                 {[...board.versions].reverse().map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
