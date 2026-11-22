@@ -163,6 +163,14 @@ describe("the status board", () => {
     expect(instructionsFor({ threadId: "thr_other", projectId: ctx.projectId })).not.toContain("This thread's status board");
   });
 
+  it("gives every board the plain-words layout, with the tool and without it", async () => {
+    const { host } = await start();
+    const tool = host.harness.registrations.agentTools.find((candidate) => candidate.name === "show_board");
+    expect(tool?.instructions).toContain("**What I need from you:**");
+    const help = await host.harness.runCli(["show-board", "--help"], { threadId: ctx.threadId });
+    expect(`${help.stdout}${help.stderr}`).toContain("**What I need from you:**");
+  });
+
   it("remembers the threads with a board when it starts again", async () => {
     const host = createFakePluginHost({ pluginId: "genui" });
     await host.bb.storage.kv.set("board:thr_kept", [{ id: "a", board: "a", title: "Launch", at: 1 }]);
