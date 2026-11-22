@@ -74,6 +74,47 @@ export function hasLaterUserMessage(items: readonly OutlineItem[] | null, anchor
   return false;
 }
 
+/** How many of the newest unanswered replies are looked at for questions. */
+const MAX_OPEN_REPLIES = 20;
+
+/** The replies whose questions may still be open, and how far back in the thread they reach. */
+export interface OpenReplies {
+  /** Assistant message ids, oldest first. */
+  readonly ids: readonly string[];
+  /** User rows (the user's own last message and the machine messages since) from the oldest of them to the end. */
+  readonly turns: number;
+}
+
+/**
+ * The assistant replies the user has not answered and no longer has at the
+ * end of the thread: those after the last message the user wrote (by the
+ * rules of `hasLaterUserMessage`) that a machine message has followed. The
+ * replies of the newest turn are left out: they stand right above the
+ * message field already.
+ */
+export function openReplies(items: readonly OutlineItem[] | null): OpenReplies {
+  if (items === null) return { ids: [], turns: 0 };
+  let highest = -1;
+  let written = -1;
+  let newestUser = -1;
+  items.forEach((item, index) => {
+    if (item.role !== "user") return;
+    const seq = userSeq(item.id);
+    if (seq !== null && seq < highest) return;
+    if (item.machine !== true) written = index;
+    newestUser = index;
+    if (seq !== null) highest = seq;
+  });
+  const open: number[] = [];
+  for (let index = written + 1; index < newestUser; index++) if (items[index]?.role === "assistant") open.push(index);
+  const kept = open.slice(-MAX_OPEN_REPLIES);
+  const first = kept[0];
+  if (first === undefined) return { ids: [], turns: 0 };
+  // The turn holding the oldest kept reply starts at the user row before it.
+  const turns = 1 + items.slice(first).filter((item) => item.role === "user").length;
+  return { ids: kept.map((index) => items[index]!.id), turns };
+}
+
 /** The part of BB's `thread:changed` realtime event this module reads. */
 export interface ThreadChange {
   readonly changes: readonly string[];

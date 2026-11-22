@@ -5,9 +5,9 @@
 // thread event can add or drop a user message, so a streaming reply costs
 // nothing. Works for blocks scrolled out of BB's virtualized timeline too,
 // since it reads the thread from the server, not the DOM.
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
-import { affectsConversation, hasLaterUserMessage, isMachineMessage, type OutlineItem } from "./supersession";
+import { affectsConversation, hasLaterUserMessage, isMachineMessage, openReplies, type OpenReplies, type OutlineItem } from "./supersession";
 
 /** Coalesces the burst of events a send produces into one read. */
 const REFRESH_DELAY_MS = 150;
@@ -228,4 +228,16 @@ export function useReplyIndex(threadId: string, messageId: string): number | nul
     const index = store.items(threadId)?.findIndex((item) => item.id === messageId) ?? -1;
     return index === -1 ? null : index;
   });
+}
+
+/**
+ * The replies of thread `threadId` whose questions the user has not answered
+ * and that machine messages have pushed up the thread (see `openReplies`),
+ * from the same shared outline. Empty until the outline is read.
+ */
+export function useOpenReplies(threadId: string): OpenReplies {
+  const store = outlinesFor(useSdk());
+  const subscribe = useCallback((listener: () => void) => store.listen(threadId, listener), [store, threadId]);
+  const items = useSyncExternalStore(subscribe, () => store.items(threadId));
+  return useMemo(() => openReplies(items), [items]);
 }
