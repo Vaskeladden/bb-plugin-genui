@@ -30,6 +30,15 @@ const { sdk, scope } = vi.hoisted(() => {
       reply("answered", 2, "Noted."),
       user("answered", 9, "Use Redis"),
     ],
+    // Asked twice without an answer: the later question is the one that stands.
+    twice: [
+      user("twice", 1, "Plan the cache"),
+      reply("twice", 1, `Which one?\n\n${ask}`),
+      user("twice", 5, "[ci watcher] CI is green on #12"),
+      reply("twice", 2, 'Still open:\n\n```ui\nCard("Cache size", [Button("Small"), Button("Large")])\n```'),
+      user("twice", 9, "[bb message from thread:thr_b] done"),
+      reply("twice", 3, "Thanks."),
+    ],
     // What was pushed up asks nothing.
     report: [user("report", 1, "Run the tests"), reply("report", 1, `Done.\n\n${report}`), user("report", 5, "[run watcher] The deploy finished"), reply("report", 2, "Good.")],
   };
@@ -121,6 +130,14 @@ describe("OpenQuestionsBanner", () => {
     expect(container.querySelector('[data-genui-renderer="composer"] button:disabled')).toBeNull();
     expect(sdk.threads.timeline).toHaveBeenCalledTimes(2);
     expect(sdk.threads.timeline).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "pushed", segmentLimit: "2", beforeAnchorId: "older", beforeAnchorSeq: "4" }));
+  });
+
+  it("shows only the newest reply that asks", async () => {
+    await show("twice");
+    expect(banner()?.textContent).toContain("1 question waits for your answer");
+    const labels = [...container.querySelectorAll('[data-genui-renderer="composer"] button')].map((button) => button.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["Small", "Large"]));
+    expect(labels).not.toContain("Use Redis");
   });
 
   it("shows nothing while the question is the newest turn, and reads no timeline", async () => {
