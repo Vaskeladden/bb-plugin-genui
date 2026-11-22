@@ -86,8 +86,10 @@ export interface UiRuntime {
    */
   loadAsset: ((src: string) => Promise<AssetBytes>) | null;
   /**
-   * True once the thread has a user message after the reply holding this
-   * block (typed, or sent from any UI): its choices are no longer the question.
+   * True once the thread has a message the user wrote after the reply holding
+   * this block (typed, or sent from any UI): its choices are no longer the
+   * question. A message sent for the user (a CI result, another thread's
+   * report; `isMachineMessage`) leaves them open.
    */
   superseded: boolean;
   /**
