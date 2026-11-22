@@ -1,5 +1,5 @@
-// The questions a thread's agent asked that the user has not answered, kept
-// above the message field. A reply's Form, Buttons, Plan or Decision stays
+// The newest question a thread's agent asked that the user has not answered,
+// kept above the message field. A reply's Form, Buttons, Plan or Decision stays
 // answerable where it stands, but a CI result, a run result or another
 // thread's message pushes it up the thread, where it is easy to miss. This
 // banner shows those blocks again, as the same blocks: one identity (message,
@@ -8,7 +8,7 @@
 //
 // Nothing is shown while the unanswered reply is the thread's newest turn:
 // it stands right above the message field already.
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement, type RefObject } from "react";
 import { useComposer, useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { compile } from "../core";
@@ -48,6 +48,7 @@ const MAX_REMEMBERED = 500;
 const RETRY_DELAY_MS = 4_000;
 const MAX_ATTEMPTS = 3;
 const remembered = new Map<string, readonly QuestionBlock[]>();
+const NO_BLOCKS: readonly QuestionBlock[] = [];
 
 function remember(messageId: string, blocks: readonly QuestionBlock[]): void {
   remembered.set(messageId, blocks);
@@ -74,8 +75,8 @@ async function replyTexts(sdk: Sdk, threadId: string, wanted: Set<string>, turns
 }
 
 /**
- * The question blocks of the replies in `replies`, oldest first. Reads the
- * thread's timeline when a reply's text is not known yet; a failed read is
+ * The question blocks of the newest reply in `replies` that asks something.
+ * Reads the thread's timeline when a reply's text is not known yet; a failed read is
  * tried again a few times, and until one works the replies it would have
  * covered show nothing.
  */
@@ -106,7 +107,14 @@ function useQuestionBlocks(threadId: string, replies: OpenReplies): readonly Que
       window.clearTimeout(retry);
     };
   }, [sdk, threadId, missing, turns, attempt]);
-  return replies.ids.flatMap((id) => remembered.get(id) ?? []);
+  // The newest reply that asks stands for the ones before it: an agent that
+  // was not answered asks again, and a thread other threads drive would
+  // otherwise stack every question it ever put to them.
+  for (let index = replies.ids.length - 1; index >= 0; index--) {
+    const blocks = remembered.get(replies.ids[index]!);
+    if (blocks !== undefined && blocks.length > 0) return blocks;
+  }
+  return NO_BLOCKS;
 }
 
 const foldedKey = (threadId: string): string => `bb.genui.questions.folded:${threadId}`;
@@ -119,11 +127,50 @@ function readFolded(threadId: string): boolean {
   }
 }
 
+/**
+ * Keeps the first question of the blocks in view inside the banner's scroll
+ * area: a block is the reply's whole card, and what it asks is often below
+ * the figures it shows first. Follows the blocks as they take their size
+ * (pictures, loaded data), until the user scrolls or touches them.
+ */
+function useQuestionInView(blocks: readonly QuestionBlock[], folded: boolean): RefObject<HTMLDivElement | null> {
+  const scroller = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = scroller.current;
+    if (node === null) return;
+    let touched = false;
+    const touch = (): void => {
+      touched = true;
+    };
+    const place = (): void => {
+      if (touched) return;
+      const question = node.querySelector("[data-genui-question]");
+      if (question === null) return;
+      const area = node.getBoundingClientRect();
+      const asked = question.getBoundingClientRect();
+      // Its end comes into view, but never so far that its start leaves.
+      const down = Math.min(asked.bottom - area.bottom + 8, asked.top - area.top);
+      if (down > 0) node.scrollTop += down;
+    };
+    const observer = new ResizeObserver(place);
+    for (const child of node.children) observer.observe(child);
+    const intents = ["wheel", "touchmove", "pointerdown", "keydown"] as const;
+    for (const intent of intents) node.addEventListener(intent, touch, { passive: true });
+    place();
+    return () => {
+      observer.disconnect();
+      for (const intent of intents) node.removeEventListener(intent, touch);
+    };
+  }, [blocks, folded]);
+  return scroller;
+}
+
 function OpenQuestions({ threadId }: { threadId: string }): ReactElement | null {
   const blocks = useQuestionBlocks(threadId, useOpenReplies(threadId));
   const actions = useThreadActions();
   const [folded, setFolded] = useState(() => readFolded(threadId));
   useEffect(() => setFolded(readFolded(threadId)), [threadId]);
+  const scroller = useQuestionInView(blocks, folded);
   if (blocks.length === 0) return null;
   const toggle = (): void => {
     const next = !folded;
@@ -148,7 +195,7 @@ function OpenQuestions({ threadId }: { threadId: string }): ReactElement | null 
         <Icon name={folded ? "ChevronRight" : "ChevronDown"} aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       </button>
       {folded ? null : (
-        <div className="flex max-h-[45dvh] min-w-0 flex-col gap-1 overflow-y-auto overscroll-contain px-2 pb-2">
+        <div ref={scroller} className="flex max-h-[40dvh] min-w-0 flex-col gap-1 overflow-y-auto overscroll-contain px-2 pb-2">
           {blocks.map((block) => (
             <div key={`${block.messageId}#${block.index}`} data-genui-fence="" data-genui-renderer="composer">
               <Fence
