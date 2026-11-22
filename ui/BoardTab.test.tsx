@@ -18,6 +18,9 @@ const bb = vi.hoisted(() => {
     /** What the board's Update and New board asked for, and what the status plugin answers. */
     requests: [] as unknown[],
     requestResult: { ok: true } as { ok: true } | { ok: false; message: string },
+    /** What the empty tab asked board_start for, and what the server answers. */
+    starts: [] as unknown[],
+    startResult: { status: "asked" } as { status: string; message?: string },
     /** The thread's message field, when it is on screen. */
     composers: [] as unknown[],
   };
@@ -30,6 +33,10 @@ const bb = vi.hoisted(() => {
         if (method === "board_request") {
           state.requests.push(input);
           return state.requestResult;
+        }
+        if (method === "board_start") {
+          state.starts.push(input);
+          return state.startResult;
         }
         const { id } = input;
         const shownId = id ?? state.versions.at(-1)?.id ?? null;
@@ -69,7 +76,7 @@ vi.mock("./useSuperseded", () => ({ useSuperseded: () => null, useReplyIndex: ()
 
 const THREAD = "thr_board";
 /** The open the opener asks bb's side panel for. */
-const BOARD_OPEN = { tab: { id: "board", context: { kind: "thread" }, availability: "action" } };
+const BOARD_OPEN = { tab: { id: "board", context: { kind: "thread" }, availability: "fixed" } };
 const report = (line: string): string => [`Bottom line: ${line}.`, "", "```ui", `Card("Status", [Text("${line} block")])`, "```"].join("\n");
 const version = (id: string, board: string, title: string, at: number): BoardVersion => ({ id, board, title, at });
 const button = (label: string): HTMLButtonElement | undefined => [...container.querySelectorAll("button")].find((candidate) => candidate.textContent === label);
@@ -114,7 +121,7 @@ async function settle(): Promise<void> {
 }
 
 async function renderTab(): Promise<void> {
-  act(() => root.render(<BoardTab threadId={THREAD} environment={null} params={null} />));
+  act(() => root.render(<BoardTab threadId={THREAD} environment={null} />));
   await settle();
 }
 
@@ -136,6 +143,8 @@ beforeEach(() => {
   bb.state.accepts = true;
   bb.state.requests = [];
   bb.state.requestResult = { ok: true };
+  bb.state.starts = [];
+  bb.state.startResult = { status: "asked" };
   bb.state.composers = [];
   container = document.createElement("div");
   document.body.append(container);
@@ -149,18 +158,42 @@ afterEach(() => {
 });
 
 describe("the Status board tab", () => {
-  it("says how to get a board when the thread has none", async () => {
+  it("asks the agent for a first board, once, when the thread has none", async () => {
     await renderTab();
     expect(container.textContent).toContain("No status board yet");
     expect(container.querySelector("header")).toBeNull();
+    expect(bb.state.starts).toEqual([{ threadId: THREAD, force: false }]);
+    expect(container.querySelector("[role=status]")?.textContent).toContain("Asked the agent for a board");
+
+    // Make it now asks again, past the server's once-per-thread guard.
+    await act(async () => button("Make it now")?.click());
+    await settle();
+    expect(bb.state.starts.at(-1)).toEqual({ threadId: THREAD, force: true });
+  });
+
+  it("says why no board was asked for", async () => {
+    bb.state.startResult = { status: "busy" };
+    await renderTab();
+    expect(container.querySelector("[role=status]")?.textContent).toContain("The agent is working now");
+    bb.state.startResult = { status: "failed", message: "thread not found" };
+    await act(async () => button("Make it now")?.click());
+    await settle();
+    expect(container.querySelector("[role=alert]")?.textContent).toBe("Couldn't ask for a board: thread not found");
+  });
+
+  it("asks for nothing when the thread has a board", async () => {
+    bb.state.versions = [version("a", "a", "Launch", 1_000)];
+    bb.state.contents = { a: report("on track") };
+    await renderTab();
+    expect(bb.state.starts).toEqual([]);
   });
 
   it("shows the newest version: its title, its prose and its block, live", async () => {
     bb.state.versions = [version("a", "a", "Launch", Date.now() - 5 * 60_000)];
     bb.state.contents = { a: report("on track") };
     await renderTab();
-    expect(container.querySelector("h2")?.textContent).toBe("Launch");
-    expect(container.querySelector("header")?.textContent).toContain("Version 1 · 5 min ago");
+    expect(container.querySelector("header [title=Launch]")?.textContent).toBe("Launch");
+    expect(container.querySelector("header")?.textContent).toContain("v1 · 5 min ago");
     expect(container.querySelector("[data-markdown]")?.textContent).toBe("Bottom line: on track.");
     expect(container.querySelector("[data-genui-fence]")?.textContent).toContain("on track block");
     // One version: nothing to pick.
@@ -179,7 +212,7 @@ describe("the Status board tab", () => {
     expect(header).toContain("Update, not checked again · last Ultrastatus 3 h ago");
     expect([...container.querySelectorAll("option")].map((option) => option.textContent)).toEqual([
       expect.not.stringContaining("Ultrastatus"),
-      expect.stringContaining("Launch v1 · Ultrastatus"),
+      expect.stringMatching(/^v1 · .+ · Launch · Ultrastatus$/),
     ]);
   });
 
@@ -235,21 +268,21 @@ describe("the Status board tab", () => {
     act(() => bb.publish({ threadId: THREAD, id: "c" }));
     await settle();
     expect(container.textContent).toContain("third block");
-    expect(container.querySelector("header")?.textContent).toContain("Version 3");
+    expect(container.querySelector("header")?.textContent).toContain("v3 ·");
   });
 });
 
 describe("going on with the work from the board", () => {
-  it("asks for an update or a new board, and says so until the report arrives", async () => {
+  it("asks for an Ultrastatus or a new board, and says so until the report arrives", async () => {
     bb.state.versions = [version("a", "a", "Launch", 1_000)];
     bb.state.contents = { a: report("first") };
     await renderTab();
-    await act(async () => button("Update")?.click());
+    await act(async () => button("Ultrastatus")?.click());
     await settle();
     expect(bb.state.requests).toEqual([{ threadId: THREAD, mode: "update" }]);
     expect(container.querySelector("header [role=status]")?.textContent).toContain("Asked the agent for an update");
 
-    await act(async () => button("New board")?.click());
+    await act(async () => container.querySelector<HTMLButtonElement>("button[aria-label='New board']")?.click());
     await settle();
     expect(bb.state.requests.at(-1)).toEqual({ threadId: THREAD, mode: "new" });
     expect(container.querySelector("header [role=status]")?.textContent).toContain("a new board");
@@ -267,12 +300,12 @@ describe("going on with the work from the board", () => {
     bb.state.contents = { a: report("first") };
     bb.state.requestResult = { ok: false, message: "plugin jb-flow is not installed" };
     await renderTab();
-    await act(async () => button("Update")?.click());
+    await act(async () => button("Ultrastatus")?.click());
     await settle();
     expect(container.querySelector("header [role=alert]")?.textContent).toBe("Couldn't ask for a report: plugin jb-flow is not installed");
   });
 
-  it("starts the first board from the empty tab", async () => {
+  it("can start the first board with a full Ultrastatus from the empty tab", async () => {
     await renderTab();
     await act(async () => button("Run Ultrastatus")?.click());
     await settle();
@@ -333,40 +366,48 @@ describe("going on with the work from the board", () => {
 });
 
 describe("opening the tab by itself", () => {
-  it("opens for a version found when the thread is opened, once", async () => {
-    bb.state.versions = [version("a", "a", "Launch", 1_000)];
-    await renderOpener();
+  // The opener opens a thread's board once per page load, so each test has its own thread.
+  it("makes the board the view a thread opens on, once per page load", async () => {
+    await renderOpener("thr_arrive");
     expect(bb.state.opened).toEqual([BOARD_OPEN]);
     act(() => root.unmount());
     root = createRoot(container);
-    await renderOpener();
+    await renderOpener("thr_arrive");
     expect(bb.state.opened).toHaveLength(1);
   });
 
-  it("stays shut for a thread without a board", async () => {
-    await renderOpener();
-    expect(bb.state.opened).toEqual([]);
+  it("tries the first open again on the next visit when BB declined it", async () => {
+    bb.state.accepts = false;
+    await renderOpener("thr_declined");
+    act(() => root.unmount());
+    root = createRoot(container);
+    bb.state.accepts = true;
+    await renderOpener("thr_declined");
+    expect(bb.state.opened).toHaveLength(2);
   });
 
-  it("opens when a version is published in its thread, not in another", async () => {
-    await renderOpener();
-    act(() => bb.publish({ threadId: "thr_other", id: "x" }));
+  it("opens when an Ultrastatus lands in its thread, not for an update or another thread", async () => {
+    await renderOpener("thr_ultra");
+    bb.state.opened = [];
+    act(() => bb.publish({ threadId: "thr_other", id: "x", kind: "ultrastatus" }));
+    act(() => bb.publish({ threadId: "thr_ultra", id: "a", kind: "update" }));
     expect(bb.state.opened).toEqual([]);
-    act(() => bb.publish({ threadId: THREAD, id: "b" }));
+    act(() => bb.publish({ threadId: "thr_ultra", id: "b", kind: "ultrastatus" }));
     expect(bb.state.opened).toEqual([BOARD_OPEN]);
     // The same version announced again opens nothing more.
-    act(() => bb.publish({ threadId: THREAD, id: "b" }));
+    act(() => bb.publish({ threadId: "thr_ultra", id: "b", kind: "ultrastatus" }));
     expect(bb.state.opened).toHaveLength(1);
   });
 
-  it("tries again later when BB declined the open", async () => {
+  it("tries an Ultrastatus open again when BB declined it", async () => {
+    await renderOpener("thr_retry");
+    bb.state.opened = [];
     bb.state.accepts = false;
-    await renderOpener();
-    act(() => bb.publish({ threadId: THREAD, id: "b" }));
+    act(() => bb.publish({ threadId: "thr_retry", id: "b", kind: "ultrastatus" }));
     bb.state.accepts = true;
-    act(() => bb.publish({ threadId: THREAD, id: "b" }));
+    act(() => bb.publish({ threadId: "thr_retry", id: "b", kind: "ultrastatus" }));
     expect(bb.state.opened).toHaveLength(2);
-    act(() => bb.publish({ threadId: THREAD, id: "b" }));
+    act(() => bb.publish({ threadId: "thr_retry", id: "b", kind: "ultrastatus" }));
     expect(bb.state.opened).toHaveLength(2);
   });
 });
