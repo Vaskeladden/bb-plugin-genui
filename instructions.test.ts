@@ -4,6 +4,7 @@ import { collectLoads, compile, dataKey, evaluate, formatDiagnostics, initialSta
 import {
   AGENT_INSTRUCTIONS,
   AGENT_INSTRUCTIONS_WEB_OFF,
+  BOARD_UPKEEP_INSTRUCTIONS,
   CODE_WORK_INSTRUCTIONS,
   UI_REFERENCE,
   UI_REFERENCE_MORE,
@@ -17,6 +18,7 @@ describe("agent instructions", () => {
     expect(AGENT_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
     expect(AGENT_INSTRUCTIONS_WEB_OFF.length).toBeLessThanOrEqual(4096);
     expect(CODE_WORK_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
+    expect(BOARD_UPKEEP_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
     expect(UI_REFERENCE.length).toBeLessThanOrEqual(4096);
     expect(UI_REFERENCE_MORE.length).toBeLessThanOrEqual(4096);
   });

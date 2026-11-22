@@ -167,6 +167,29 @@ describe("the Status board tab", () => {
     expect(container.querySelector("select")).toBeNull();
   });
 
+  it("labels an Ultrastatus, and says an update was not checked again and when the last Ultrastatus was", async () => {
+    const now = Date.now();
+    bb.state.versions = [
+      { ...version("a", "a", "Launch", now - 3 * 3_600_000), kind: "ultrastatus" },
+      { ...version("b", "a", "Launch", now - 2 * 60_000), kind: "update" },
+    ];
+    bb.state.contents = { a: report("checked"), b: report("from the work") };
+    await renderTab();
+    const header = container.querySelector("header")?.textContent ?? "";
+    expect(header).toContain("Update, not checked again · last Ultrastatus 3 h ago");
+    expect([...container.querySelectorAll("option")].map((option) => option.textContent)).toEqual([
+      expect.not.stringContaining("Ultrastatus"),
+      expect.stringContaining("Launch v1 · Ultrastatus"),
+    ]);
+  });
+
+  it("says when an update has no Ultrastatus before it", async () => {
+    bb.state.versions = [{ ...version("a", "a", "Launch", Date.now()), kind: "update" }];
+    bb.state.contents = { a: report("from the work") };
+    await renderTab();
+    expect(container.querySelector("header")?.textContent).toContain("no Ultrastatus in the history");
+  });
+
   it("goes back to an earlier version and says so", async () => {
     bb.state.versions = [version("a", "a", "Launch", 1_000), version("b", "a", "Launch", 2_000)];
     bb.state.contents = { a: report("first"), b: report("second") };

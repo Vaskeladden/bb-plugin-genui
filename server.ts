@@ -19,6 +19,8 @@
 // - keeps each thread's status boards (board-store.ts): the show_board tool
 //   puts a checked report in the thread's side panel, as a new version of the
 //   board there or as a new board; `bb genui board` prints the current one.
+//   A thread that has a board tells its agent to keep it current (kind
+//   "update", which never counts as an Ultrastatus).
 import { cliCommand, defineCli, defineRpcContract, PluginCliError, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -44,7 +46,9 @@ import {
   MAX_BOARD_CHARS,
   MAX_BOARD_TITLE_CHARS,
   MAX_BOARD_VERSIONS,
+  kindOf,
   versionNumber,
+  type BoardKind,
   type BoardMode,
   type BoardVersion,
 } from "./core/board";
@@ -64,7 +68,14 @@ import {
   type EnvironmentsResult,
 } from "./core/project";
 import { examplesReport } from "./examples";
-import { AGENT_INSTRUCTIONS, AGENT_INSTRUCTIONS_WEB_OFF, CODE_WORK_INSTRUCTIONS, UI_REFERENCE, UI_REFERENCE_MORE } from "./instructions";
+import {
+  AGENT_INSTRUCTIONS,
+  AGENT_INSTRUCTIONS_WEB_OFF,
+  BOARD_UPKEEP_INSTRUCTIONS,
+  CODE_WORK_INSTRUCTIONS,
+  UI_REFERENCE,
+  UI_REFERENCE_MORE,
+} from "./instructions";
 import { foundImageSchema, wikiPhotoSchema } from "./web/commons";
 import { locatedSchema } from "./web/geocode";
 import { createWebLookups, MAX_TILE_ZOOM } from "./web/lookups";
@@ -318,6 +329,16 @@ export default async function plugin(bb: BbPluginApi) {
 
   const boards = createBoardStore(bb);
   /**
+   * Threads that have a status board: their sessions are told to keep it
+   * current. contributeInstructions must answer synchronously, so this is
+   * read once at start and grows with every publish.
+   */
+  const boardThreads = new Set<string>();
+  void boards.threads().then(
+    (threads) => threads.forEach((threadId) => boardThreads.add(threadId)),
+    (cause: unknown) => bb.log.warn(`board: could not list the threads with a board: ${cause instanceof Error ? cause.message : String(cause)}`),
+  );
+  /**
    * The chat message a board published now comes after, so an answer picked on
    * it later can link to where the chat stood. Null when the thread's newest
    * events hold no message or can't be read: the board is published either
@@ -334,7 +355,7 @@ export default async function plugin(bb: BbPluginApi) {
   /** Checks every block of a board and stores it as a version; a failed check stores nothing. For the show_board tool and `bb genui show-board`. */
   async function publishBoard(
     threadId: string,
-    { content, title, mode }: { content: string; title: string | null; mode: BoardMode },
+    { content, title, mode, kind }: { content: string; title: string | null; mode: BoardMode; kind: BoardKind },
   ): Promise<{ ok: boolean; text: string }> {
     const segments = boardSegments(content);
     if (segments.length === 0) return { ok: false, text: "The board is empty: nothing was stored." };
@@ -358,16 +379,18 @@ export default async function plugin(bb: BbPluginApi) {
         text: `Nothing was stored: ${failures.length} block${failures.length === 1 ? "" : "s"} failed the check. Fix and publish again.\n\n${failures.join("\n\n")}`,
       };
     }
-    const { added, versions } = await boards.publish(threadId, { content, title, mode, chat: await newestChatMessage(threadId) });
+    const { added, versions } = await boards.publish(threadId, { content, title, mode, kind, chat: await newestChatMessage(threadId) });
+    boardThreads.add(threadId);
+    const what = kind === "ultrastatus" ? "an Ultrastatus" : "an update (not checked again)";
     return {
       ok: true,
-      text: `On the status board as version ${versionNumber(versions, added.id)} of «${added.title}»; the side panel shows it. Don't repeat its content in your reply.`,
+      text: `On the status board as version ${versionNumber(versions, added.id)} of «${added.title}», ${what}; the side panel shows it. Don't repeat its content in your reply. Keep the board current from now on: before you end a turn in which the work moved, publish it again with mode "update" and kind "update", changing only what that turn changed.`,
     };
   }
   bb.agents.registerTool({
     name: "show_board",
     description:
-      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it only when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
+      "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel, and to keep a board this thread already has current: before you end a turn in which the work moved, publish it again with kind \"update\", changing only what that turn changed. Pass kind \"ultrastatus\" only for an Ultrastatus request, which checks every row again; an update never counts as one. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
     parameters: z.object({
       content: z.string().min(1).max(MAX_BOARD_CHARS).describe("The board: markdown with ```ui and ```app blocks, as a reply would hold them"),
       title: z.string().min(1).max(MAX_BOARD_TITLE_CHARS).optional().describe("A few words naming the board; omitted, an update keeps the board's title"),
@@ -375,10 +398,14 @@ export default async function plugin(bb: BbPluginApi) {
         .enum(["update", "new"])
         .optional()
         .describe('"update" (default) adds a version to the board the thread shows; "new" starts another board and leaves the old one in the history'),
+      kind: z
+        .enum(["ultrastatus", "update"])
+        .optional()
+        .describe('"update" (default): brought up to date from your own work, without checking every row again. "ultrastatus": only for an Ultrastatus request, every row checked again'),
     }),
     presentation: { label: { pending: "Updating the status board", completed: "Updated the status board" } },
-    async execute({ content, title, mode }, ctx) {
-      const { ok, text } = await publishBoard(ctx.threadId, { content, title: title ?? null, mode: mode ?? "update" });
+    async execute({ content, title, mode, kind }, ctx) {
+      const { ok, text } = await publishBoard(ctx.threadId, { content, title: title ?? null, mode: mode ?? "update", kind: kind ?? "update" });
       return { content: [{ type: "text", text }], isError: !ok };
     },
   });
@@ -404,7 +431,10 @@ export default async function plugin(bb: BbPluginApi) {
     const instructions = web.isOn() ? AGENT_INSTRUCTIONS : AGENT_INSTRUCTIONS_WEB_OFF;
     return { tools: ["check_ui", "ui_examples", "show_board"], skills: [], instructions };
   });
-  bb.agents.contributeInstructions(({ threadId }) => (personThreads.has(threadId) ? CODE_WORK_INSTRUCTIONS : null));
+  bb.agents.contributeInstructions(({ threadId }) => {
+    if (!personThreads.has(threadId)) return null;
+    return boardThreads.has(threadId) ? `${CODE_WORK_INSTRUCTIONS}\n\n${BOARD_UPKEEP_INSTRUCTIONS}` : CODE_WORK_INSTRUCTIONS;
+  });
 
   bb.rpc.register(rpcContract, {
     async get_ui({ id }) {
@@ -548,7 +578,8 @@ export default async function plugin(bb: BbPluginApi) {
             const describe = (version: BoardVersion): string => {
               const link = chatLink(threadId, version);
               const made = link === null ? "" : ` at ${link}`;
-              return `«${version.title}», version ${versionNumber(versions, version.id)}, published ${new Date(version.at).toISOString()}${made}`;
+              const kind = kindOf(version) === "ultrastatus" ? "an Ultrastatus" : "an update, not checked again";
+              return `«${version.title}», version ${versionNumber(versions, version.id)} (${kind}), published ${new Date(version.at).toISOString()}${made}`;
             };
             // An earlier version says so, and what replaced it: the work may have moved on since.
             const later = shown.id === newest.id ? "" : `\nNot the newest: ${describe(newest)} (bb genui board) came after it.`;
@@ -562,6 +593,7 @@ export default async function plugin(bb: BbPluginApi) {
           options: {
             title: { type: "string", description: "A few words naming the board; omitted, an update keeps the board's title" },
             new: { type: "boolean", description: "Start another board instead of adding a version to the one the thread shows" },
+            ultrastatus: { type: "boolean", description: "Only for an Ultrastatus request, which checked every row again; omitted, the version is an update" },
             thread: { type: "string", description: "Thread ID; defaults to the thread running the command" },
           },
           positionals: [{ name: "file", description: "The board's file", required: true }],
@@ -584,6 +616,7 @@ export default async function plugin(bb: BbPluginApi) {
               content,
               title: title === undefined || title === "" ? null : title,
               mode: input.options.new === true ? "new" : "update",
+              kind: input.options.ultrastatus === true ? "ultrastatus" : "update",
             });
             return ok ? { exitCode: 0, stdout: `${text}\n` } : { exitCode: 1, stderr: `${text}\n` };
           },

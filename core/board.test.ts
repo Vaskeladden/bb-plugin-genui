@@ -1,13 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { boardOrigin, boardSegments, boardSignal, chatLink, chatMessage, MAX_BOARD_VERSIONS, versionNumber, withVersion, type BoardVersion } from "./board";
+import {
+  boardOrigin,
+  boardSegments,
+  boardSignal,
+  chatLink,
+  chatMessage,
+  kindOf,
+  lastUltrastatus,
+  MAX_BOARD_VERSIONS,
+  versionNumber,
+  withVersion,
+  type BoardKind,
+  type BoardVersion,
+} from "./board";
 
-const publish = (versions: readonly BoardVersion[], id: string, mode: "update" | "new", title: string | null = null): BoardVersion[] =>
-  withVersion(versions, { id, title, mode, at: 1000 + versions.length, chat: null }).versions;
+const publish = (
+  versions: readonly BoardVersion[],
+  id: string,
+  mode: "update" | "new",
+  title: string | null = null,
+  kind: BoardKind = "ultrastatus",
+): BoardVersion[] => withVersion(versions, { id, title, mode, kind, at: 1000 + versions.length, chat: null }).versions;
 
 describe("a board's versions", () => {
   it("starts a board with the first version, whatever the mode", () => {
     const versions = publish([], "a", "update");
-    expect(versions).toEqual([{ id: "a", board: "a", title: "Status", at: 1000, chat: null }]);
+    expect(versions).toEqual([{ id: "a", board: "a", title: "Status", at: 1000, chat: null, kind: "ultrastatus" }]);
   });
 
   it("adds an update to the newest board and keeps its title", () => {
@@ -38,11 +56,48 @@ describe("a board's versions", () => {
   it("keeps the newest versions when the history is full and names the one that fell out", () => {
     let versions: BoardVersion[] = [];
     for (let index = 0; index < MAX_BOARD_VERSIONS; index++) versions = publish(versions, `v${index}`, "update");
-    const next = withVersion(versions, { id: "last", title: null, mode: "update", at: 5000, chat: null });
+    const next = withVersion(versions, { id: "last", title: null, mode: "update", kind: "ultrastatus", at: 5000, chat: null });
     expect(next.versions).toHaveLength(MAX_BOARD_VERSIONS);
     expect(next.versions[0]?.id).toBe("v1");
     expect(next.added.id).toBe("last");
     expect(next.dropped).toEqual(["v0"]);
+  });
+
+  it("drops the oldest update before any Ultrastatus when the history is full", () => {
+    let versions: BoardVersion[] = [];
+    for (let index = 0; index < MAX_BOARD_VERSIONS; index++) {
+      versions = publish(versions, `v${index}`, "update", null, index % 2 === 0 ? "ultrastatus" : "update");
+    }
+    const next = withVersion(versions, { id: "last", title: null, mode: "update", kind: "update", at: 5000, chat: null });
+    expect(next.dropped).toEqual(["v1"]);
+    expect(next.versions.map(({ id }) => id).slice(0, 3)).toEqual(["v0", "v2", "v3"]);
+    expect(next.versions.at(-1)).toMatchObject({ id: "last", kind: "update" });
+  });
+
+  it("keeps a new update even when every other version is an Ultrastatus", () => {
+    let versions: BoardVersion[] = [];
+    for (let index = 0; index < MAX_BOARD_VERSIONS; index++) versions = publish(versions, `v${index}`, "update");
+    const next = withVersion(versions, { id: "last", title: null, mode: "update", kind: "update", at: 5000, chat: null });
+    expect(next.dropped).toEqual(["v0"]);
+    expect(next.versions.at(-1)?.id).toBe("last");
+  });
+
+  it("reads a version stored before kinds as an Ultrastatus", () => {
+    expect(kindOf({ id: "a", board: "a", title: "Old", at: 1 })).toBe("ultrastatus");
+  });
+
+  it("finds the Ultrastatus an update builds on, within its own board", () => {
+    const versions = publish(
+      publish(publish(publish([], "a", "new", "Launch"), "b", "update", null, "update"), "c", "update", null, "update"),
+      "d",
+      "new",
+      "Second",
+      "update",
+    );
+    const byId = (id: string): BoardVersion => versions.find((version) => version.id === id)!;
+    expect(lastUltrastatus(versions, byId("c"))?.id).toBe("a");
+    expect(lastUltrastatus(versions, byId("a"))?.id).toBe("a");
+    expect(lastUltrastatus(versions, byId("d"))).toBeNull();
   });
 });
 
@@ -81,6 +136,13 @@ describe("the line above an answer picked on a board", () => {
     );
   });
 
+  it("says when the version is an update, which was not checked again", () => {
+    const withUpdate = publish(versions, "d", "update", null, "update");
+    expect(boardOrigin("thr_1", withUpdate, "d", "21 Nov 15:02")).toBe(
+      "From the status board «Second», version 2 (an update, not checked again) of 21 Nov 15:02 (`bb genui board --version d` prints it):",
+    );
+  });
+
   it("says when the version is not the newest of its board", () => {
     const two = publish(publish([], "a", "new", "Launch"), "b", "update");
     expect(boardOrigin("thr_1", two, "a", "21 Nov 13:00")).toBe(
@@ -93,7 +155,7 @@ describe("the line above an answer picked on a board", () => {
   });
 
   it("links to where the chat stood when the version was made", () => {
-    const made = withVersion(versions, { id: "d", title: null, mode: "update", at: 4, chat: 412 }).versions;
+    const made = withVersion(versions, { id: "d", title: null, mode: "update", kind: "ultrastatus", at: 4, chat: 412 }).versions;
     expect(boardOrigin("thr_1", made, "d", "21 Nov 15:00")).toBe(
       "From the status board «Second», version 2 of 21 Nov 15:00, made at @thread:thr_1#msg=412 (`bb genui board --version d` prints it):",
     );

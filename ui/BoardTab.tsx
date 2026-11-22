@@ -24,7 +24,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { cn } from "@/lib/utils";
 import { BOARD_CHANNEL } from "../board-channel";
-import { boardOrigin, boardSegments, boardSignal, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
+import { boardOrigin, boardSegments, boardSignal, kindOf, lastUltrastatus, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
 import { relativeTime } from "../core/project";
 import type { rpcContract } from "../server";
 import { Fence, useThreadActions } from "./Fence";
@@ -147,6 +147,7 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
             <h2 className="m-0 line-clamp-2 text-sm font-semibold">{version.title}</h2>
             <p className="m-0 text-xs text-muted-foreground">
               Version {versionNumber(board.versions, version.id)} · {relativeTime(version.at, now)}
+              <KindNote versions={board.versions} version={version} now={now} />
               {version.id !== newest.id && <span className="ml-1.5 rounded bg-state-hover px-1.5 py-0.5 font-medium text-foreground">Earlier version</span>}
               {load.status === "failed" && <span className="ml-1.5 text-destructive">Couldn&apos;t refresh: {load.message}</span>}
             </p>
@@ -186,6 +187,7 @@ export function BoardTab({ threadId }: ExperimentalThreadActionTabProps): ReactE
                 {[...board.versions].reverse().map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
                     {TIME.format(candidate.at)} · {candidate.title} v{versionNumber(board.versions, candidate.id)}
+                    {kindOf(candidate) === "ultrastatus" ? " · Ultrastatus" : ""}
                   </option>
                 ))}
               </select>
@@ -265,6 +267,23 @@ function BoardAnswers({ threadId }: { threadId: string }): ReactElement | null {
         </button>
       )}
     </footer>
+  );
+}
+
+/**
+ * What a version is worth: an Ultrastatus checked every row again; an update
+ * is the agent's own account of its work and never counts as one, so it says
+ * when the board was last checked.
+ */
+function KindNote({ versions, version, now }: { versions: readonly BoardVersion[]; version: BoardVersion; now: number }): ReactElement {
+  if (kindOf(version) === "ultrastatus") {
+    return <span className="ml-1.5 rounded bg-state-hover px-1.5 py-0.5 font-medium text-foreground">Ultrastatus</span>;
+  }
+  const checked = lastUltrastatus(versions, version);
+  return (
+    <span className="ml-1.5" title="The agent updated the board from its own work, without checking every row again. Only an Ultrastatus checks them all.">
+      · Update, not checked again · {checked === null ? "no Ultrastatus in the history" : `last Ultrastatus ${relativeTime(checked.at, now)}`}
+    </span>
   );
 }
 

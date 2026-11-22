@@ -16,6 +16,16 @@ describe("the plugin's settings", () => {
 describe("the status board", () => {
   const ctx = { threadId: "thr_board", projectId: "proj_1", signal: new AbortController().signal };
   const report = (line: string): string => ["On track.", "", "```ui", `Card("Status", [Text("${line}")])`, "```"].join("\n");
+  /** A session a person reads, as BB resolves it for the configure hook. */
+  const session = (id: string) => ({
+    pluginMetadata: {},
+    thread: { id, title: null, parentThreadId: null, sourceThreadId: null },
+    project: { id: ctx.projectId, kind: "standard" as const, name: "p", gitRemoteUrl: null },
+    environment: { id: "env", name: null, path: null, branchName: null, workspaceProvisionType: null },
+    host: { id: "h", name: "h" },
+    provider: { id: "claude-code", model: "m", capabilities: { supportsNativeUserQuestion: false } },
+    origin: { kind: null, pluginId: null },
+  });
 
   async function start() {
     const host = createFakePluginHost({ pluginId: "genui" });
@@ -31,7 +41,7 @@ describe("the status board", () => {
     };
     const get = (id: string | null) =>
       host.harness.callRpc("board_get", { threadId: ctx.threadId, id }) as Promise<{
-        versions: { id: string; board: string; title: string; at: number; chat?: number | null }[];
+        versions: { id: string; board: string; title: string; at: number; chat?: number | null; kind?: string }[];
         shown: { id: string; content: string } | null;
       }>;
     return { host, show, get };
@@ -67,7 +77,8 @@ describe("the status board", () => {
     const { show, get, host } = await start();
     const first = await show({ content: report("first"), title: "Launch" });
     expect(first).toMatchObject({ isError: false });
-    expect(first.text).toContain("version 1 of «Launch»");
+    expect(first.text).toContain("version 1 of «Launch», an update (not checked again)");
+    expect(first.text).toContain('Keep the board current from now on');
     const second = await show({ content: report("second") });
     expect(second.text).toContain("version 2 of «Launch»");
 
@@ -86,14 +97,14 @@ describe("the status board", () => {
 
     const cli = await host.harness.runCli(["board"], { threadId: ctx.threadId });
     expect(cli.exitCode).toBe(0);
-    expect(cli.stdout).toContain("«Launch», version 2");
+    expect(cli.stdout).toContain("«Launch», version 2 (an update, not checked again)");
     expect(cli.stdout).toContain(report("second"));
     expect(cli.stdout).not.toContain("Not the newest");
 
     // An answer from the board names the version it was picked on: that one can be printed, and says it was replaced.
     const earlier = await host.harness.runCli(["board", "--version", newest.versions[0]!.id], { threadId: ctx.threadId });
     expect(earlier.exitCode).toBe(0);
-    expect(earlier.stdout).toContain("«Launch», version 1, published");
+    expect(earlier.stdout).toContain("«Launch», version 1 (an update, not checked again), published");
     expect(earlier.stdout).toContain("Not the newest: «Launch», version 2");
     expect(earlier.stdout).toContain(report("first"));
     const missing = await host.harness.runCli(["board", "--version", "nope"], { threadId: ctx.threadId });
@@ -128,6 +139,38 @@ describe("the status board", () => {
     expect((await get(null)).versions[0]).toMatchObject({ chat: null });
     const cli = await host.harness.runCli(["board"], { threadId: ctx.threadId });
     expect(cli.stdout).not.toContain("#msg=");
+  });
+
+  it("counts a version as an Ultrastatus only when it says it is one", async () => {
+    const { show, get, host } = await start();
+    const ultra = await show({ content: report("checked"), title: "Launch", kind: "ultrastatus" });
+    expect(ultra.text).toContain("version 1 of «Launch», an Ultrastatus");
+    await show({ content: report("from the work") });
+    expect((await get(null)).versions.map(({ kind }) => kind)).toEqual(["ultrastatus", "update"]);
+    const cli = await host.harness.runCli(["board", "--version", (await get(null)).versions[0]!.id], { threadId: ctx.threadId });
+    expect(cli.stdout).toContain("«Launch», version 1 (an Ultrastatus), published");
+  });
+
+  it("tells the agent of a thread with a board to keep it current, and no other thread", async () => {
+    const { show, host } = await start();
+    const configure = host.harness.registrations.agentConfigurationProvider!;
+    const instructionsFor = host.harness.registrations.instructionProvider!;
+    configure(session(ctx.threadId));
+    configure(session("thr_other"));
+    expect(instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId })).not.toContain("This thread's status board");
+    await show({ content: report("first") });
+    expect(instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId })).toContain("This thread's status board");
+    expect(instructionsFor({ threadId: "thr_other", projectId: ctx.projectId })).not.toContain("This thread's status board");
+  });
+
+  it("remembers the threads with a board when it starts again", async () => {
+    const host = createFakePluginHost({ pluginId: "genui" });
+    await host.bb.storage.kv.set("board:thr_kept", [{ id: "a", board: "a", title: "Launch", at: 1 }]);
+    await host.bb.storage.kv.set("board:thr_kept:a", { content: report("first") });
+    await plugin(host.bb);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    host.harness.registrations.agentConfigurationProvider!(session("thr_kept"));
+    expect(host.harness.registrations.instructionProvider!({ threadId: "thr_kept", projectId: ctx.projectId })).toContain("This thread's status board");
   });
 
   it("starts another board on mode «new» and leaves the old one in the history", async () => {
