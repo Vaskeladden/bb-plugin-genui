@@ -57,6 +57,27 @@ Card("Day 1", [Map([{name: "Belém Tower, Lisbon", note: "Opens 9:30"}, {name: "
 \`\`\``;
 
 /**
+ * How every status board reads, Ultrastatus or update: the show_board tool's
+ * instructions, and the help of `bb genui show-board` for agents without the
+ * tool. The owner reads boards to see in a minute how a thread is going, so
+ * a board opens with the same five plain lines, and each visual sits under a
+ * plain question with a sentence or two saying what it means. Boards written
+ * before this read as engineering notes (hashes, PR numbers, long paragraphs).
+ */
+export const BOARD_LAYOUT = `# Status board layout
+Write every board, Ultrastatus or update, so someone who does not code sees in one minute how the work is going. Use the same order every time:
+1. **In plain words.** Markdown before any block, these five lines, each one or two very short sentences:
+   **What we are making:** <the goal>
+   **How far we are:** <e.g. "About 7 of 10 parts are done.">
+   **What changed since last time:** <or "Nothing changed.">
+   **What happens now:** <who or what is working on what, and what it waits for>
+   **What I need from you:** <or "Nothing right now.">
+2. One bar of the whole job.
+3. The «Next» card: what the user can press.
+4. Every other block under a heading that is a plain question, such as "What is done and what is left?", "What comes next?", "How do the parts fit?" or "What could go wrong?". Right under the heading, one or two sentences on what it means for the goal; then the block.
+Words: donkey language. Very short sentences, one idea each, everyday words. Name each part by what it does for the user, never by its code name. No commit hashes, pull request or issue numbers, ids, file or function names, branch names or test names in the prose. Proof goes in a cell's note or a Details at the bottom. No paragraph longer than three sentences. Write in the language the user writes in.`;
+
+/**
  * Contributed after CODE_WORK_INSTRUCTIONS to the sessions of a thread that
  * has a status board (server.ts keeps which do): the agent keeps the board
  * current from its own work, so the side panel never waits for the next
@@ -65,9 +86,9 @@ Card("Day 1", [Map([{name: "Belém Tower, Lisbon", note: "Opens 9:30"}, {name: "
  */
 export const BOARD_UPKEEP_INSTRUCTIONS = `# This thread's status board
 This thread has a status board in the side panel (show_board; \`bb genui board\` prints it). Keep it current: before you end a turn in which the work moved (a step finished or started, a pull request opened, changed its checks or merged, something went live, a decision was made, the plan changed, a new blocker), or in which the user asked for a status, publish the board again with show_board, mode "update" and kind "update". Skip it when nothing on the board changed, such as a quick answer.
-- Start from the board as it is (\`bb genui board\`, or the version you last published in this session) and change only what this turn changed: the marks of the rows it touched, the bottom line, what is left and the «Next» card's controls. Keep its title, rows, names and order. Add rows for new work; mark a dropped row dropped, never remove it.
+- Start from the board as it is (\`bb genui board\`, or the version you last published in this session) and change only what this turn changed: the «In plain words» lines, the marks of the rows it touched, what is left and the «Next» card's controls. Keep its title, rows, names and order. Add rows for new work; mark a dropped row dropped, never remove it. A board written before the board layout gets that layout now.
 - Write from what you know from your own work; you need not check every row again. A row you learned nothing new about keeps what the board said.
-- Open with one short line on what changed ("Since last time: …").
+- «What changed since last time» says what this turn changed, in plain words.
 - Only an Ultrastatus request checks every row and publishes kind "ultrastatus". Never pass it otherwise, and never call an update an Ultrastatus.
 - Your reply stays as it would have been; don't repeat the board in it.`;
 

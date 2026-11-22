@@ -71,6 +71,7 @@ import { examplesReport } from "./examples";
 import {
   AGENT_INSTRUCTIONS,
   AGENT_INSTRUCTIONS_WEB_OFF,
+  BOARD_LAYOUT,
   BOARD_UPKEEP_INSTRUCTIONS,
   CODE_WORK_INSTRUCTIONS,
   UI_REFERENCE,
@@ -389,6 +390,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
   bb.agents.registerTool({
     name: "show_board",
+    instructions: BOARD_LAYOUT,
     description:
       "Puts a report on this thread's status board: a tab in the thread's side panel that opens by itself and stays there, where a reply would scroll away. Use it when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel, and to keep a board this thread already has current: before you end a turn in which the work moved, publish it again with kind \"update\", changing only what that turn changed. Pass kind \"ultrastatus\" only for an Ultrastatus request, which checks every row again; an update never counts as one. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
     parameters: z.object({
@@ -589,7 +591,7 @@ export default async function plugin(bb: BbPluginApi) {
         "show-board": cliCommand({
           summary: "Put a markdown file with ui and app blocks on a thread's status board, as the show_board tool does",
           description:
-            "For an agent without the show_board tool. The file is one of the thread's: a workspace path or $BB_THREAD_STORAGE/<name>. Every block is checked first; a failed check stores nothing and exits 1.",
+            `For an agent without the show_board tool. The file is one of the thread's: a workspace path or $BB_THREAD_STORAGE/<name>. Every block is checked first; a failed check stores nothing and exits 1.\n\n${BOARD_LAYOUT}`,
           options: {
             title: { type: "string", description: "A few words naming the board; omitted, an update keeps the board's title" },
             new: { type: "boolean", description: "Start another board instead of adding a version to the one the thread shows" },
