@@ -71,7 +71,7 @@ describe("the status board", () => {
 
   it("has no board until one is published", async () => {
     const { get, host } = await start();
-    expect(await get(null)).toEqual({ versions: [], shown: null });
+    expect(await get(null)).toEqual({ versions: [], shown: null, copy: null });
     const cli = await host.harness.runCli(["board"], { threadId: ctx.threadId });
     expect(cli.exitCode).toBe(1);
   });
@@ -257,12 +257,18 @@ describe("the status board", () => {
 
     await idle(ctx.threadId);
     expect(forks()).toBe(1);
+    // The board tab shows the copy as running, and hears when it starts and ends.
+    const copyOf = async () => ((await host.harness.callRpc("board_get", { threadId: ctx.threadId, id: null })) as { copy: unknown }).copy;
+    expect(await copyOf()).toEqual({ purpose: "board", since: expect.any(Number) });
+    expect(host.harness.realtimeSignals).toContainEqual({ channel: "board-copy", payload: { threadId: ctx.threadId } });
     // Another turn ends while that copy runs: no second copy now.
     await idle(ctx.threadId);
     expect(forks()).toBe(1);
     await vi.advanceTimersByTimeAsync(10_000);
     await idle("thr_copy01", "Board updated.");
     expect(host.harness.sdk.callsTo("threads.delete").at(-1)?.[0]).toMatchObject({ threadId: "thr_copy01" });
+    expect(await copyOf()).toBeNull();
+    expect(host.harness.realtimeSignals.filter((signal) => signal.channel === "board-copy")).toHaveLength(2);
     // The turn that ended meanwhile, and the next ones, wait for the gap: one update covers them all.
     expect(forks()).toBe(1);
     await idle(ctx.threadId);
@@ -315,7 +321,7 @@ describe("the status board", () => {
     const result = await host.harness.callAgentTool("show_board", { content: report("from the copy"), kind: "ultrastatus" }, { threadId: "thr_copy01" });
     expect(JSON.stringify(result)).toContain("an Ultrastatus");
     expect((await get(null)).versions).toHaveLength(1);
-    expect(await host.harness.callRpc("board_get", { threadId: "thr_copy01", id: null })).toEqual({ versions: [], shown: null });
+    expect(await host.harness.callRpc("board_get", { threadId: "thr_copy01", id: null })).toEqual({ versions: [], shown: null, copy: null });
 
     const cli = await host.harness.runCli(["board"], { threadId: "thr_copy01" });
     expect(cli.stdout).toContain("from the copy");
@@ -361,13 +367,13 @@ describe("the status board", () => {
     expect(broken.isError).toBe(true);
     expect(broken.text).toContain("Nothing was stored");
     expect(broken.text).toContain("ui block 1");
-    expect(await get(null)).toEqual({ versions: [], shown: null });
+    expect(await get(null)).toEqual({ versions: [], shown: null, copy: null });
     expect(host.harness.realtimeSignals).toEqual([]);
   });
 
   it("is only another thread's board when asked for that thread", async () => {
     const { show, host } = await start();
     await show({ content: report("first") });
-    expect(await host.harness.callRpc("board_get", { threadId: "thr_other", id: null })).toEqual({ versions: [], shown: null });
+    expect(await host.harness.callRpc("board_get", { threadId: "thr_other", id: null })).toEqual({ versions: [], shown: null, copy: null });
   });
 });

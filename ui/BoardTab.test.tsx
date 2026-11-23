@@ -23,6 +23,8 @@ const bb = vi.hoisted(() => {
     startResult: { status: "asked" } as { status: string; message?: string },
     /** The thread's message field, when it is on screen. */
     composers: [] as unknown[],
+    /** The background copy working on the board, as board_get reports it. */
+    copy: null as { purpose: string; since: number } | null,
   };
   return {
     state,
@@ -40,7 +42,7 @@ const bb = vi.hoisted(() => {
         }
         const { id } = input;
         const shownId = id ?? state.versions.at(-1)?.id ?? null;
-        return { versions: state.versions, shown: shownId === null ? null : { id: shownId, content: state.contents[shownId] ?? "" } };
+        return { versions: state.versions, shown: shownId === null ? null : { id: shownId, content: state.contents[shownId] ?? "" }, copy: state.copy };
       },
     },
     panel: {
@@ -143,6 +145,7 @@ beforeEach(() => {
   bb.state.accepts = true;
   bb.state.requests = [];
   bb.state.requestResult = { ok: true };
+  bb.state.copy = null;
   bb.state.starts = [];
   bb.state.startResult = { status: "asked" };
   bb.state.composers = [];
@@ -293,6 +296,42 @@ describe("going on with the work from the board", () => {
     act(() => bb.publish({ threadId: THREAD, id: "b" }));
     await settle();
     expect(container.querySelector("header [role=status]")).toBeNull();
+  });
+
+  it("shows a loader while a background copy runs the Ultrastatus, and blocks a second one", async () => {
+    bb.state.versions = [version("a", "a", "Launch", 1_000)];
+    bb.state.contents = { a: report("first") };
+    await renderTab();
+    await act(async () => button("Ultrastatus")?.click());
+    // The copy starts: the server says so on the board-copy channel.
+    bb.state.copy = { purpose: "ultra", since: Date.now() };
+    act(() => bb.publish({ threadId: THREAD }));
+    await settle();
+    expect(container.querySelector("header [role=status]")?.textContent).toContain("Ultrastatus is running in the background · started just now");
+    expect(container.querySelector("header svg .animate-spin")).not.toBeNull();
+    expect(button("Ultrastatus")?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>("button[aria-label='New board']")?.disabled).toBe(true);
+
+    // A copy for another thread changes nothing here.
+    bb.state.copy = null;
+    act(() => bb.publish({ threadId: "thr_other" }));
+    await settle();
+    expect(container.querySelector("header [role=status]")?.textContent).toContain("Ultrastatus is running");
+
+    // It ends: the loader goes, the buttons come back, and no «Asked…» note is left waiting.
+    act(() => bb.publish({ threadId: THREAD }));
+    await settle();
+    expect(container.querySelector("header [role=status]")).toBeNull();
+    expect(button("Ultrastatus")?.disabled).toBe(false);
+  });
+
+  it("says an automatic board check runs without blocking the buttons", async () => {
+    bb.state.versions = [version("a", "a", "Launch", 1_000)];
+    bb.state.contents = { a: report("first") };
+    bb.state.copy = { purpose: "board", since: Date.now() - 3 * 60_000 };
+    await renderTab();
+    expect(container.querySelector("header [role=status]")?.textContent).toContain("Checking whether the board needs an update in the background · started 3 min ago");
+    expect(button("Ultrastatus")?.disabled).toBe(false);
   });
 
   it("says why when the report could not be asked for", async () => {
