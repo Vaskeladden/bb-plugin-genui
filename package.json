@@ -70,7 +70,7 @@
     "hono": "^4.11.9",
     "jsdom": "^31.0.0",
     "playwright-core": "1.65.0",
-    "sonner": "^1.7.4",
+    "sonner": "^2.0.0",
     "tailwind-merge": "^3.4.0",
     "typescript": "^5.7.0",
     "vaul": "^1.1.2",
