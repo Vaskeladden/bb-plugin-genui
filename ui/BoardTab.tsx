@@ -27,7 +27,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
-import { BOARD_CHANNEL } from "../board-channel";
+import { BOARD_CHANNEL, BOARD_COPY_CHANNEL } from "../board-channel";
 import { boardOrigin, boardSegments, boardSignal, kindOf, lastUltrastatus, versionNumber, type BoardMode, type BoardVersion } from "../core/board";
 import { relativeTime } from "../core/project";
 import type { rpcContract } from "../server";
@@ -49,6 +49,13 @@ const TIME = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short"
 interface Board {
   readonly versions: readonly BoardVersion[];
   readonly shown: { readonly id: string; readonly content: string } | null;
+  /** The background copy working on the board now, if any. */
+  readonly copy: Copy | null;
+}
+
+interface Copy {
+  readonly purpose: "board" | "status" | "ultra";
+  readonly since: number;
 }
 
 type Load = { readonly status: "loading" } | { readonly status: "failed"; readonly message: string } | { readonly status: "ready" };
@@ -97,6 +104,8 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [asked, setAsked] = useState<Asked>({ status: "idle" });
   const [started, setStarted] = useState<Started>({ status: "idle" });
+  /** Bumped when a background copy for this thread starts or ends, so its loader follows it. */
+  const [copyTick, setCopyTick] = useState(0);
 
   useRealtime(BOARD_CHANNEL, (payload) => {
     if (boardSignal(payload)?.threadId !== threadId) return;
@@ -104,6 +113,12 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
     setPicked(null);
     setPublished((count) => count + 1);
     setAsked({ status: "idle" });
+  });
+  useRealtime(BOARD_COPY_CHANNEL, (payload) => {
+    if ((payload as { threadId?: unknown } | null)?.threadId !== threadId) return;
+    setCopyTick((count) => count + 1);
+    // The copy's loader takes over from «Asked…»; when it ends without a new version, the note would wait forever.
+    setAsked((current) => (current.status === "asked" ? { status: "idle" } : current));
   });
 
   const request = useCallback(
@@ -147,11 +162,14 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
     return () => {
       live = false;
     };
-  }, [rpc, threadId, picked, published]);
+  }, [rpc, threadId, picked, published, copyTick]);
 
   const shown = board?.shown ?? null;
   const version = shown === null ? undefined : board?.versions.find((candidate) => candidate.id === shown.id);
   const newest = board?.versions.at(-1);
+  const copy = board?.copy ?? null;
+  /** A Status or Ultrastatus already runs: asking again would only start a second one. */
+  const reporting = copy !== null && copy.purpose !== "board";
 
   let body: ReactNode;
   if (shown !== null && version !== undefined && board !== null) {
@@ -171,7 +189,7 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
           </button>
           <button
             type="button"
-            disabled={asked.status === "asking"}
+            disabled={asked.status === "asking" || reporting}
             onClick={() => request("new")}
             title="Ask the agent to check every part of the work again and make the board from that"
             className={BUTTON}
@@ -179,7 +197,7 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
             Run Ultrastatus
           </button>
         </div>
-        <RequestNote asked={asked} />
+        {copy !== null ? <CopyNote copy={copy} now={now} /> : <RequestNote asked={asked} />}
       </div>
     );
 
@@ -220,7 +238,7 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
               )}
               <button
                 type="button"
-                disabled={asked.status === "asking"}
+                disabled={asked.status === "asking" || reporting}
                 onClick={() => request("update")}
                 title="Ultrastatus: the agent checks every part of the work again and brings this board in line with what is really done"
                 className={SMALL_BUTTON}
@@ -230,7 +248,7 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
               </button>
               <button
                 type="button"
-                disabled={asked.status === "asking"}
+                disabled={asked.status === "asking" || reporting}
                 onClick={() => request("new")}
                 title="New board: a fresh Ultrastatus that starts the board over; this one stays in the history"
                 aria-label="New board"
@@ -246,7 +264,7 @@ export function BoardTab({ threadId }: ExperimentalThreadTabProps): ReactElement
             {version.id !== newest.id && <span className="ml-1.5 rounded bg-state-hover px-1 font-medium text-foreground">Earlier version</span>}
             {load.status === "failed" && <span className="ml-1.5 text-destructive">Couldn&apos;t refresh: {load.message}</span>}
           </p>
-          <RequestNote asked={asked} />
+          {copy !== null ? <CopyNote copy={copy} now={now} /> : <RequestNote asked={asked} />}
         </header>
       )}
       <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3")}>{body}</div>
@@ -269,6 +287,27 @@ function RequestNote({ asked }: { asked: Asked }): ReactElement | null {
   return (
     <p role="status" className="m-0 mt-1 text-xs text-muted-foreground">
       {asked.status === "asking" ? `Asking for ${what}…` : `Asked the agent for ${what}. It shows here when the report is ready.`}
+    </p>
+  );
+}
+
+const COPY_WORK: Record<Copy["purpose"], string> = {
+  board: "Checking whether the board needs an update",
+  status: "Status is running",
+  ultra: "Ultrastatus is running",
+};
+
+/** The loader while a background copy works on this board: what it does and since when. */
+function CopyNote({ copy, now }: { copy: Copy; now: number }): ReactElement {
+  return (
+    <p role="status" className="m-0 mt-1 flex items-center gap-1.5 text-xs text-foreground">
+      <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 shrink-0 text-primary">
+        <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" className="origin-center animate-spin motion-reduce:animate-none" />
+      </svg>
+      <span>
+        {COPY_WORK[copy.purpose]} in the background · started {relativeTime(copy.since, now)}.
+        {copy.purpose === "board" ? " It changes only if something moved." : " The board changes here when it is done."}
+      </span>
     </p>
   );
 }

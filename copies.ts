@@ -16,6 +16,7 @@
 
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { BOARD_COPY_CHANNEL } from "./board-channel";
 import { BOARD_COPY_REQUEST } from "./instructions";
 
 export const COPY_PURPOSES = ["board", "status", "ultra"] as const;
@@ -93,6 +94,7 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
     known.set(copyId, record);
     running.set(sourceId, { copyId, at: record.at });
     if (purpose === "board") lastBoard.set(sourceId, record.at);
+    bb.realtime.publish(BOARD_COPY_CHANNEL, { threadId: sourceId });
     refused.delete(sourceId);
     await bb.storage.kv.set(copyKey(copyId), record);
     await bb.storage.kv.delete(refusedKey(sourceId)).catch(() => {});
@@ -147,7 +149,10 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
         // A copy created with its request never idles before that request has run; an empty
         // reply (only tool calls) still ends it.
         if (lastAssistantText === null && Date.now() - record.at < 5_000) return;
-        if (running.get(record.sourceId)?.copyId === thread.id) running.delete(record.sourceId);
+        if (running.get(record.sourceId)?.copyId === thread.id) {
+          running.delete(record.sourceId);
+          bb.realtime.publish(BOARD_COPY_CHANNEL, { threadId: record.sourceId });
+        }
         known.delete(thread.id);
         await bb.storage.kv.delete(copyKey(thread.id));
         // A board copy is done once it published: deleted, or one hidden thread would pile up per turn.
@@ -197,6 +202,12 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
   return {
     run,
     canCopy,
+    /** The copy working for this thread now (what it does and since when), for the board's loader; null when none runs. */
+    activeFor(sourceId: string): { purpose: CopyPurpose; since: number } | null {
+      const busy = running.get(sourceId);
+      if (busy === undefined || Date.now() - busy.at >= COPY_STALE_MS) return null;
+      return { purpose: known.get(busy.copyId)?.purpose ?? "board", since: busy.at };
+    },
     /** The thread a copy writes for: its source when `threadId` is a copy, else null. */
     async sourceOf(threadId: string): Promise<string | null> {
       return (await recordOf(threadId))?.sourceId ?? null;

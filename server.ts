@@ -261,6 +261,8 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       versions: z.array(z.custom<BoardVersion>()),
       shown: z.object({ id: z.string(), content: z.string() }).nullable(),
+      // The background copy working on this thread's board now, if any: the tab shows it as running.
+      copy: z.object({ purpose: z.enum(COPY_PURPOSES), since: z.number() }).nullable(),
     }),
   },
   // Shown a thread without a board: asks its agent once for one, when the
@@ -530,7 +532,7 @@ export default async function plugin(bb: BbPluginApi) {
       const versions = await boards.versions(threadId);
       const shownId = id ?? versions.at(-1)?.id ?? null;
       const content = shownId === null ? null : await boards.content(threadId, shownId);
-      return { versions, shown: shownId === null || content === null ? null : { id: shownId, content } };
+      return { versions, shown: shownId === null || content === null ? null : { id: shownId, content }, copy: copies.activeFor(threadId) };
     },
     async board_start({ threadId, force }) {
       if ((await boards.versions(threadId)).length > 0) return { status: "has-board" as const };
