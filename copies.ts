@@ -5,9 +5,12 @@
 // one request (bring the board up to date, a Status, an Ultrastatus) in the
 // same folder, publishes to the thread's board (show_board and the CLI follow
 // `sourceOf`) and is put away when it goes idle: a board copy deleted, a
-// Status or Ultrastatus copy archived so its report can still be read. After each turn of a thread a
-// person reads, one copy updates its board; a turn that ends while a copy for
-// that thread still runs gets one more copy after it, never two at once.
+// Status or Ultrastatus copy archived so its report can still be read. After a
+// turn of a thread a person reads, one copy updates its board, at most once per
+// BOARD_GAP_MS: a turn that ends sooner, or while a copy for that thread still
+// runs, gets one update when the gap is over, which covers every turn since.
+// Each copy re-reads the whole conversation, so the gap is what keeps a busy
+// thread from costing a copy per turn.
 // A thread whose agent can't be forked (bb refuses the fork) keeps doing its
 // board itself: `canCopy` says so, and the instructions follow it.
 
@@ -29,6 +32,8 @@ const TITLES: Record<CopyPurpose, string> = {
 
 /** A copy that never went idle (its agent died, bb restarted) stops blocking the next one after this long. */
 export const COPY_STALE_MS = 30 * 60_000;
+/** The shortest time between two board updates of one thread. */
+export const BOARD_GAP_MS = 10 * 60_000;
 /** How long a refused fork keeps a thread on doing its board itself before it is tried again. */
 export const NO_COPY_MS = 24 * 60 * 60_000;
 
@@ -44,10 +49,15 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
   const running = new Map<string, { copyId: string; at: number }>();
   /** Sources whose turn ended while their copy ran: one more board update after it. */
   const again = new Set<string>();
+  /** source id → when its last board copy started. */
+  const lastBoard = new Map<string, number>();
+  /** source id → the timer of its board update due when the gap is over; mirrored in kv so a reload keeps it. */
+  const due = new Map<string, ReturnType<typeof setTimeout>>();
   /** source id → when bb last refused to fork it. */
   const refused = new Map<string, number>();
   const copyKey = (id: string) => `copy:${id}`;
   const refusedKey = (id: string) => `noCopy:${id}`;
+  const dueKey = (id: string) => `boardDue:${id}`;
   const error = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
   async function recordOf(copyId: string): Promise<CopyRecord | null> {
@@ -82,21 +92,52 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
     const record = { sourceId, purpose, at: Date.now() };
     known.set(copyId, record);
     running.set(sourceId, { copyId, at: record.at });
+    if (purpose === "board") lastBoard.set(sourceId, record.at);
     refused.delete(sourceId);
     await bb.storage.kv.set(copyKey(copyId), record);
     await bb.storage.kv.delete(refusedKey(sourceId)).catch(() => {});
     return { ok: true, copyId };
   }
 
-  /** One board update for a thread whose turn ended, unless a copy for it still runs (then one after it). */
+  /**
+   * One board update for a thread whose turn ended: now, or when the gap since its last one is over,
+   * or after the copy that still runs for it. One planned update covers every turn before it.
+   */
   async function updateBoard(sourceId: string): Promise<void> {
+    if (due.has(sourceId)) return;
     const busy = running.get(sourceId);
     if (busy !== undefined && Date.now() - busy.at < COPY_STALE_MS) {
       again.add(sourceId);
       return;
     }
     running.delete(sourceId);
+    const at = (lastBoard.get(sourceId) ?? 0) + BOARD_GAP_MS;
+    if (at > Date.now()) {
+      await planBoard(sourceId, at);
+      return;
+    }
     await run(sourceId, BOARD_COPY_REQUEST, "board");
+  }
+
+  async function planBoard(sourceId: string, at: number): Promise<void> {
+    if (due.has(sourceId)) return;
+    const timer = setTimeout(() => {
+      due.delete(sourceId);
+      void (async () => {
+        try {
+          await bb.storage.kv.delete(dueKey(sourceId));
+          if (!canCopy(sourceId)) return;
+          // The thread may have been archived or deleted while the update waited.
+          const thread = await bb.sdk.threads.get({ threadId: sourceId });
+          if (thread.archivedAt !== null) return;
+          await updateBoard(sourceId);
+        } catch (cause) {
+          bb.log.warn(`copy: planned board update of ${sourceId} failed: ${error(cause)}`);
+        }
+      })();
+    }, Math.max(0, at - Date.now()));
+    due.set(sourceId, timer);
+    await bb.storage.kv.set(dueKey(sourceId), { at }).catch(() => {});
   }
 
   bb.events.on("thread.idle", async ({ thread, lastAssistantText }) => {
@@ -129,17 +170,29 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
     return at === undefined || Date.now() - at > NO_COPY_MS;
   }
 
-  // Refusals survive a reload, so a thread that can't be forked keeps its own board instructions.
+  // Refusals survive a reload, so a thread that can't be forked keeps its own board instructions,
+  // and so do planned updates, so a reload never drops a thread's last turns from its board.
   void (async () => {
     try {
       for (const key of await bb.storage.kv.list("noCopy:")) {
         const parsed = z.object({ at: z.number() }).safeParse(await bb.storage.kv.get(key));
         if (parsed.success) refused.set(key.slice("noCopy:".length), parsed.data.at);
       }
+      for (const key of await bb.storage.kv.list("boardDue:")) {
+        const parsed = z.object({ at: z.number() }).safeParse(await bb.storage.kv.get(key));
+        const sourceId = key.slice("boardDue:".length);
+        if (parsed.success && THREAD_ID.test(sourceId)) await planBoard(sourceId, parsed.data.at);
+        else await bb.storage.kv.delete(key);
+      }
     } catch (cause) {
-      bb.log.warn(`copy: could not read the threads that can't be copied: ${error(cause)}`);
+      bb.log.warn(`copy: could not read the threads that can't be copied or wait for a board update: ${error(cause)}`);
     }
   })();
+
+  bb.onDispose(() => {
+    for (const timer of due.values()) clearTimeout(timer);
+    due.clear();
+  });
 
   return {
     run,

@@ -405,7 +405,7 @@ export default async function plugin(bb: BbPluginApi) {
     boardThreads.add(threadId);
     const what = kind === "ultrastatus" ? "an Ultrastatus" : "an update (not checked again)";
     const keep = copies.canCopy(threadId)
-      ? "A background copy keeps it current after each turn; don't publish it again yourself unless the user asks."
+      ? "A background copy keeps it current after your turns, at most every 10 minutes; don't publish it again yourself unless the user asks."
       : 'Keep the board current from now on: before you end a turn in which the work moved, publish it again with mode "update" and kind "update", changing only what that turn changed.';
     return {
       ok: true,
@@ -472,7 +472,7 @@ export default async function plugin(bb: BbPluginApi) {
     const copyOf = copies.knownSourceOf(threadId);
     if (copyOf !== null) return copyInstructions(copyOf);
     if (!personThreads.has(threadId)) return null;
-    // A background copy updates the board after each turn; a thread that can't be forked keeps its board itself.
+    // A background copy updates the board after a turn, at most every 10 minutes; a thread that can't be forked keeps its board itself.
     if (copies.canCopy(threadId)) return `${CODE_WORK_INSTRUCTIONS}\n\n${BOARD_BY_COPY_INSTRUCTIONS}`;
     return `${CODE_WORK_INSTRUCTIONS}\n\n${boardThreads.has(threadId) ? BOARD_UPKEEP_INSTRUCTIONS : BOARD_START_INSTRUCTIONS}`;
   });

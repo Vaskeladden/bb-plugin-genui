@@ -105,7 +105,7 @@ Then: ${BOARD_KEEP}`;
  * the user can ask for it while the agent works without interrupting it.
  */
 export const BOARD_BY_COPY_INSTRUCTIONS = `# This thread's status board
-This thread has a status board in the side panel (\`bb genui board\` prints it): the user's standard view of how the work is going. A background copy of you brings it up to date after each of your turns, from this conversation, so don't publish it yourself and don't spend any of your turn on it. Use show_board only when the user's message in this turn asks you for the board or to put something in the side panel.`;
+This thread has a status board in the side panel (\`bb genui board\` prints it): the user's standard view of how the work is going. A background copy of you brings it up to date after your turns (at most every 10 minutes), from this conversation, so don't publish it yourself and don't spend any of your turn on it. Use show_board only when the user's message in this turn asks you for the board or to put something in the side panel.`;
 
 /** The rules for one update of a board, shared by the copy's request below. */
 const BOARD_UPDATE_RULES = `- Start from the board as it is (\`bb genui board\`) and change only what moved: the «In plain words» lines, the marks of the rows it touched, what is left and the «Next» card's controls. Keep its title, rows, names and order. Add rows for new work; mark a dropped row dropped, never remove it. A board written before the board layout gets that layout now.
@@ -114,7 +114,7 @@ const BOARD_UPDATE_RULES = `- Start from the board as it is (\`bb genui board\`)
 - Publish with show_board, mode "update" and kind "update". Never kind "ultrastatus", and never call an update an Ultrastatus.`;
 
 /**
- * What a background copy is asked after each turn of the thread it copies
+ * What a background copy is asked after a turn of the thread it copies
  * (copies.ts): bring the board up to date, or leave it when nothing moved.
  */
 export const BOARD_COPY_REQUEST = `[status board] The thread's last turn just ended. Bring its status board up to date.
