@@ -68,7 +68,7 @@
     "clsx": "^2.1.1",
     "cron-parser": "^5.5.0",
     "hono": "^4.11.9",
-    "jsdom": "^27.4.0",
+    "jsdom": "^31.0.0",
     "playwright-core": "1.65.0",
     "sonner": "^1.7.4",
     "tailwind-merge": "^3.4.0",
