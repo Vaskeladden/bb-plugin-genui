@@ -1,5 +1,5 @@
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./server";
 
 describe("the plugin's settings", () => {
@@ -14,6 +14,9 @@ describe("the plugin's settings", () => {
 });
 
 describe("the status board", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   const ctx = { threadId: "thr_board", projectId: "proj_1", signal: new AbortController().signal };
   const report = (line: string): string => ["On track.", "", "```ui", `Card("Status", [Text("${line}")])`, "```"].join("\n");
   /** A session a person reads, as BB resolves it for the configure hook. */
@@ -78,7 +81,7 @@ describe("the status board", () => {
     const first = await show({ content: report("first"), title: "Launch" });
     expect(first).toMatchObject({ isError: false });
     expect(first.text).toContain("version 1 of «Launch», an update (not checked again)");
-    expect(first.text).toContain("A background copy keeps it current after each turn");
+    expect(first.text).toContain("A background copy keeps it current after your turns, at most every 10 minutes");
     const second = await show({ content: report("second") });
     expect(second.text).toContain("version 2 of «Launch»");
 
@@ -158,7 +161,7 @@ describe("the status board", () => {
     configure(session(ctx.threadId));
     configure(session("thr_other"));
     const copied = instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId });
-    expect(copied).toContain("A background copy of you brings it up to date after each of your turns");
+    expect(copied).toContain("A background copy of you brings it up to date after your turns (at most every 10 minutes)");
     expect(copied).not.toContain("This thread has none yet");
 
     // bb refuses to fork these threads (their agent can't be forked): they keep their board themselves.
@@ -240,29 +243,62 @@ describe("the status board", () => {
     expect(await host.harness.callRpc("board_start", { threadId: "thr_gone", force: false })).toEqual({ status: "failed", message: "thread not found" });
   });
 
-  it("updates the board in a background copy after each turn, one copy at a time, and archives it when done", async () => {
+  it("updates the board in a background copy after a turn, at most once every 10 minutes, one copy at a time", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { host } = await start();
     host.harness.registrations.agentConfigurationProvider!(session(ctx.threadId));
     let next = 0;
     host.harness.sdk.stub("threads.fork", async () => ({ id: `thr_copy0${++next}` }));
     host.harness.sdk.stub("threads.delete", async () => ({ ok: true }));
+    host.harness.sdk.stub("threads.get", async ({ threadId }: { threadId: string }) => makeThreadResponse({ id: threadId }));
+    const forks = () => host.harness.sdk.callsTo("threads.fork").length;
     const idle = (id: string, text: string | null = "Done.") =>
       host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id }), lastAssistantText: text });
 
     await idle(ctx.threadId);
-    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(1);
-    // Another turn ends while that copy runs: no second copy now, one after it.
+    expect(forks()).toBe(1);
+    // Another turn ends while that copy runs: no second copy now.
     await idle(ctx.threadId);
-    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(1);
+    expect(forks()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
     await idle("thr_copy01", "Board updated.");
     expect(host.harness.sdk.callsTo("threads.delete").at(-1)?.[0]).toMatchObject({ threadId: "thr_copy01" });
-    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(2);
+    // The turn that ended meanwhile, and the next ones, wait for the gap: one update covers them all.
+    expect(forks()).toBe(1);
+    await idle(ctx.threadId);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await idle(ctx.threadId);
+    expect(forks()).toBe(1);
+    expect(await host.bb.storage.kv.get(`boardDue:${ctx.threadId}`)).toMatchObject({ at: expect.any(Number) });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(forks()).toBe(2);
+    expect(await host.bb.storage.kv.get(`boardDue:${ctx.threadId}`)).toBeUndefined();
     await idle("thr_copy02", "Nothing changed.");
-    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(forks()).toBe(2);
+
+    // Ten minutes after the last copy a turn gets its update at once.
+    await idle(ctx.threadId);
+    expect(forks()).toBe(3);
 
     // Threads no person reads (spawned by an agent or a plugin) get no copy.
     await idle("thr_unread");
-    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(2);
+    expect(forks()).toBe(3);
+  });
+
+  it("skips a planned board update of a thread archived while it waited, and keeps one across a reload", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const host = createFakePluginHost({ pluginId: "genui" });
+    await host.bb.storage.kv.set("boardDue:thr_kept", { at: Date.now() + 60_000 });
+    await host.bb.storage.kv.set("boardDue:thr_gone", { at: Date.now() + 60_000 });
+    await plugin(host.bb);
+    host.harness.sdk.stub("threads.fork", async () => ({ id: "thr_copy01" }));
+    host.harness.sdk.stub("threads.get", async ({ threadId }: { threadId: string }) =>
+      makeThreadResponse({ id: threadId, archivedAt: threadId === "thr_gone" ? Date.now() : null }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(host.harness.sdk.callsTo("threads.fork").map(([args]) => (args as { sourceThreadId: string }).sourceThreadId)).toEqual(["thr_kept"]);
+    expect(await host.bb.storage.kv.list("boardDue:")).toEqual([]);
   });
 
   it("puts what a copy publishes on the board of the thread it copies", async () => {
