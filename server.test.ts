@@ -1,4 +1,4 @@
-import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
+import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import plugin from "./server";
 
@@ -78,7 +78,7 @@ describe("the status board", () => {
     const first = await show({ content: report("first"), title: "Launch" });
     expect(first).toMatchObject({ isError: false });
     expect(first.text).toContain("version 1 of «Launch», an update (not checked again)");
-    expect(first.text).toContain('Keep the board current from now on');
+    expect(first.text).toContain("A background copy keeps it current after each turn");
     const second = await show({ content: report("second") });
     expect(second.text).toContain("version 2 of «Launch»");
 
@@ -151,12 +151,23 @@ describe("the status board", () => {
     expect(cli.stdout).toContain("«Launch», version 1 (an Ultrastatus), published");
   });
 
-  it("tells the agent of a thread without a board to make one, and of a thread with one to keep it current", async () => {
+  it("leaves the board to a background copy, and tells a thread that can't be copied to make and keep it itself", async () => {
     const { show, host } = await start();
     const configure = host.harness.registrations.agentConfigurationProvider!;
     const instructionsFor = host.harness.registrations.instructionProvider!;
     configure(session(ctx.threadId));
     configure(session("thr_other"));
+    const copied = instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId });
+    expect(copied).toContain("A background copy of you brings it up to date after each of your turns");
+    expect(copied).not.toContain("This thread has none yet");
+
+    // bb refuses to fork these threads (their agent can't be forked): they keep their board themselves.
+    host.harness.sdk.stub("threads.fork", async () => {
+      throw new Error("provider does not support fork");
+    });
+    for (const threadId of [ctx.threadId, "thr_other"]) {
+      expect(await host.harness.callRpc("copy_run", { threadId, text: "Status", purpose: "status" })).toEqual({ ok: false, message: "provider does not support fork" });
+    }
     const before = instructionsFor({ threadId: ctx.threadId, projectId: ctx.projectId });
     expect(before).toContain("This thread has none yet");
     expect(before).not.toContain("This thread has a status board");
@@ -165,11 +176,11 @@ describe("the status board", () => {
     expect(instructionsFor({ threadId: "thr_other", projectId: ctx.projectId })).toContain("This thread has none yet");
   });
 
-  it("asks a thread without a board for its first one, once, and only when that makes sense", async () => {
+  it("has a background copy make a thread's first board, once, even while its agent works", async () => {
     const { show, host } = await start();
-    const thread = { status: "idle", archivedAt: null as number | null };
+    const thread = { status: "running", archivedAt: null as number | null };
     host.harness.sdk.stub("threads.get", async () => thread);
-    host.harness.sdk.stub("threads.send", async () => undefined);
+    host.harness.sdk.stub("threads.fork", async () => ({ id: "thr_copy01" }));
     const events = [{ seq: 4, type: "item/completed", data: { item: { type: "agentMessage" } } }];
     host.harness.sdk.stub("threads.events.list", async () => events);
     const begin = (force = false) => host.harness.callRpc("board_start", { threadId: ctx.threadId, force });
@@ -177,32 +188,105 @@ describe("the status board", () => {
     thread.archivedAt = 1;
     expect(await begin()).toEqual({ status: "archived" });
     thread.archivedAt = null;
+    events.length = 0;
+    expect(await begin()).toEqual({ status: "no-history" });
+    expect(host.harness.sdk.callsTo("threads.fork")).toEqual([]);
+
+    events.push({ seq: 4, type: "item/completed", data: { item: { type: "agentMessage" } } });
+    expect(await begin()).toEqual({ status: "asked" });
+    expect(host.harness.sdk.callsTo("threads.fork").at(-1)?.[0]).toMatchObject({
+      sourceThreadId: ctx.threadId,
+      visibility: "hidden",
+      lifecycleOwnerThreadId: ctx.threadId,
+      pluginMetadata: { copyOf: ctx.threadId, purpose: "board" },
+      input: [{ type: "text", text: expect.stringContaining("[status board] The thread's last turn just ended") }],
+    });
+    expect(host.harness.sdk.callsTo("threads.send")).toEqual([]);
+    expect(await begin()).toEqual({ status: "already-asked" });
+
+    await show({ content: report("first") });
+    expect(await begin(true)).toEqual({ status: "has-board" });
+  });
+
+  it("asks a thread that can't be copied for its first board, once, and only when that makes sense", async () => {
+    const { host } = await start();
+    const thread = { status: "idle", archivedAt: null as number | null };
+    host.harness.sdk.stub("threads.get", async () => thread);
+    host.harness.sdk.stub("threads.send", async () => undefined);
+    host.harness.sdk.stub("threads.fork", async () => {
+      throw new Error("provider does not support fork");
+    });
+    await host.harness.callRpc("copy_run", { threadId: ctx.threadId, text: "Status", purpose: "status" });
+    const events = [{ seq: 4, type: "item/completed", data: { item: { type: "agentMessage" } } }];
+    host.harness.sdk.stub("threads.events.list", async () => events);
+    const begin = (force = false) => host.harness.callRpc("board_start", { threadId: ctx.threadId, force });
+
     thread.status = "running";
     expect(await begin()).toEqual({ status: "busy" });
     thread.status = "idle";
-    events.length = 0;
-    expect(await begin()).toEqual({ status: "no-history" });
-    expect(host.harness.sdk.callsTo("threads.send")).toEqual([]);
-
-    events.push({ seq: 4, type: "item/completed", data: { item: { type: "agentMessage" } } });
     expect(await begin()).toEqual({ status: "asked" });
     expect(host.harness.sdk.callsTo("threads.send").at(-1)?.[0]).toMatchObject({
       threadId: ctx.threadId,
       mode: "queue-if-active",
       input: [{ type: "text", text: expect.stringContaining("[status board] This thread has no status board yet") }],
     });
-    // Asked once: opening the tab again asks nothing more, unless the user presses Make it now.
     expect(await begin()).toEqual({ status: "already-asked" });
     expect(await begin(true)).toEqual({ status: "asked" });
     expect(host.harness.sdk.callsTo("threads.send")).toHaveLength(2);
-
-    await show({ content: report("first") });
-    expect(await begin(true)).toEqual({ status: "has-board" });
 
     host.harness.sdk.stub("threads.get", async () => {
       throw new Error("thread not found");
     });
     expect(await host.harness.callRpc("board_start", { threadId: "thr_gone", force: false })).toEqual({ status: "failed", message: "thread not found" });
+  });
+
+  it("updates the board in a background copy after each turn, one copy at a time, and archives it when done", async () => {
+    const { host } = await start();
+    host.harness.registrations.agentConfigurationProvider!(session(ctx.threadId));
+    let next = 0;
+    host.harness.sdk.stub("threads.fork", async () => ({ id: `thr_copy0${++next}` }));
+    host.harness.sdk.stub("threads.delete", async () => ({ ok: true }));
+    const idle = (id: string, text: string | null = "Done.") =>
+      host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id }), lastAssistantText: text });
+
+    await idle(ctx.threadId);
+    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(1);
+    // Another turn ends while that copy runs: no second copy now, one after it.
+    await idle(ctx.threadId);
+    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(1);
+    await idle("thr_copy01", "Board updated.");
+    expect(host.harness.sdk.callsTo("threads.delete").at(-1)?.[0]).toMatchObject({ threadId: "thr_copy01" });
+    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(2);
+    await idle("thr_copy02", "Nothing changed.");
+    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(2);
+
+    // Threads no person reads (spawned by an agent or a plugin) get no copy.
+    await idle("thr_unread");
+    expect(host.harness.sdk.callsTo("threads.fork")).toHaveLength(2);
+  });
+
+  it("puts what a copy publishes on the board of the thread it copies", async () => {
+    const { host, get } = await start();
+    const configure = host.harness.registrations.agentConfigurationProvider!;
+    const copySession = { ...session("thr_copy01"), pluginMetadata: { copyOf: ctx.threadId, purpose: "ultra" }, origin: { kind: "fork" as const, pluginId: "genui" } };
+    const configured = configure(copySession);
+    expect(configured.tools).toContain("show_board");
+    // A copy is not a thread a person reads: it is told it is a copy, and gets no board of its own.
+    const copyText = host.harness.registrations.instructionProvider!({ threadId: "thr_copy01", projectId: ctx.projectId });
+    expect(copyText).toContain(`You are a hidden copy of thread ${ctx.threadId}`);
+    expect(copyText).not.toContain("This thread's status board");
+
+    const result = await host.harness.callAgentTool("show_board", { content: report("from the copy"), kind: "ultrastatus" }, { threadId: "thr_copy01" });
+    expect(JSON.stringify(result)).toContain("an Ultrastatus");
+    expect((await get(null)).versions).toHaveLength(1);
+    expect(await host.harness.callRpc("board_get", { threadId: "thr_copy01", id: null })).toEqual({ versions: [], shown: null });
+
+    const cli = await host.harness.runCli(["board"], { threadId: "thr_copy01" });
+    expect(cli.stdout).toContain("from the copy");
+
+    // Metadata anyone can write never points a copy at something that is not a thread id.
+    expect(configure({ ...session("thr_copy02"), pluginMetadata: { copyOf: "../etc" }, origin: { kind: "fork" as const, pluginId: "genui" } }).tools).toEqual([]);
+    expect(host.harness.registrations.instructionProvider!({ threadId: "thr_copy02", projectId: ctx.projectId })).toBeNull();
   });
 
   it("gives every board the plain-words layout, with the tool and without it", async () => {
@@ -213,10 +297,11 @@ describe("the status board", () => {
     expect(`${help.stdout}${help.stderr}`).toContain("**What I need from you:**");
   });
 
-  it("remembers the threads with a board when it starts again", async () => {
+  it("remembers the threads with a board, and those it can't copy, when it starts again", async () => {
     const host = createFakePluginHost({ pluginId: "genui" });
     await host.bb.storage.kv.set("board:thr_kept", [{ id: "a", board: "a", title: "Launch", at: 1 }]);
     await host.bb.storage.kv.set("board:thr_kept:a", { content: report("first") });
+    await host.bb.storage.kv.set("noCopy:thr_kept", { at: Date.now() });
     await plugin(host.bb);
     await new Promise((resolve) => setTimeout(resolve, 0));
     host.harness.registrations.agentConfigurationProvider!(session("thr_kept"));

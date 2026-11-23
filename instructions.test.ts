@@ -4,11 +4,14 @@ import { collectLoads, compile, dataKey, evaluate, formatDiagnostics, initialSta
 import {
   AGENT_INSTRUCTIONS,
   AGENT_INSTRUCTIONS_WEB_OFF,
+  BOARD_BY_COPY_INSTRUCTIONS,
+  BOARD_COPY_REQUEST,
   BOARD_LAYOUT,
   BOARD_START_INSTRUCTIONS,
   BOARD_START_REQUEST,
   BOARD_UPKEEP_INSTRUCTIONS,
   CODE_WORK_INSTRUCTIONS,
+  copyInstructions,
   UI_REFERENCE,
   UI_REFERENCE_MORE,
   WEB_LOOKUPS_OFF,
@@ -24,6 +27,9 @@ describe("agent instructions", () => {
     expect(BOARD_UPKEEP_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
     expect(BOARD_START_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
     expect(BOARD_START_REQUEST.length).toBeLessThanOrEqual(4096);
+    expect(BOARD_BY_COPY_INSTRUCTIONS.length).toBeLessThanOrEqual(4096);
+    expect(BOARD_COPY_REQUEST.length).toBeLessThanOrEqual(4096);
+    expect(copyInstructions("thr_abcdefghij").length).toBeLessThanOrEqual(4096);
     expect(BOARD_LAYOUT.length).toBeLessThanOrEqual(4096);
     expect(UI_REFERENCE.length).toBeLessThanOrEqual(4096);
     expect(UI_REFERENCE_MORE.length).toBeLessThanOrEqual(4096);

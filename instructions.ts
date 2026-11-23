@@ -100,6 +100,44 @@ Every thread has a status board in the side panel (show_board; \`bb genui board\
 Then: ${BOARD_KEEP}`;
 
 /**
+ * Contributed instead of the two above to a thread whose board a background
+ * copy keeps (copies.ts): the agent never spends its own turn on the board, so
+ * the user can ask for it while the agent works without interrupting it.
+ */
+export const BOARD_BY_COPY_INSTRUCTIONS = `# This thread's status board
+This thread has a status board in the side panel (\`bb genui board\` prints it): the user's standard view of how the work is going. A background copy of you brings it up to date after each of your turns, from this conversation, so don't publish it yourself and don't spend any of your turn on it. Use show_board only when the user's message in this turn asks you for the board or to put something in the side panel.`;
+
+/** The rules for one update of a board, shared by the copy's request below. */
+const BOARD_UPDATE_RULES = `- Start from the board as it is (\`bb genui board\`) and change only what moved: the «In plain words» lines, the marks of the rows it touched, what is left and the «Next» card's controls. Keep its title, rows, names and order. Add rows for new work; mark a dropped row dropped, never remove it. A board written before the board layout gets that layout now.
+- Write from what the conversation shows; you need not check every row again. A row you learned nothing new about keeps what the board said.
+- «What changed since last time» says what changed since the board's last version, in plain words.
+- Publish with show_board, mode "update" and kind "update". Never kind "ultrastatus", and never call an update an Ultrastatus.`;
+
+/**
+ * What a background copy is asked after each turn of the thread it copies
+ * (copies.ts): bring the board up to date, or leave it when nothing moved.
+ */
+export const BOARD_COPY_REQUEST = `[status board] The thread's last turn just ended. Bring its status board up to date.
+- Publish again only if that turn moved the work: a step finished or started, a pull request opened, changed its checks or merged, something went live, a decision was made, the plan changed, a new blocker, or the user asked for a status. If nothing on the board changed, such as a quick answer, publish nothing.
+- If the thread has no board yet: make the first one when the thread has real work (not a single quick question), from its whole history; a new thread's board is short (the goal, the parts you see, what comes first).
+${BOARD_UPDATE_RULES}
+Reply in one line: what you changed on the board, or «Nothing changed».`;
+
+/**
+ * What a background copy is told in its session (copies.ts): who it is, that
+ * it only reads, and that the board tools act on the thread it copies.
+ * `sourceId` is checked by the caller to be a thread id.
+ */
+export function copyInstructions(sourceId: string): string {
+  return `# You are a background copy
+You are a hidden copy of thread ${sourceId}, made so that thread is never interrupted for a status. It keeps working in the same folder while you run, and your reply is not shown in its chat.
+- Only read. Do not edit, create or delete files in the workspace, run git commands that change anything, push, merge, comment, message other threads, or start long work. Files of your own in $BB_THREAD_STORAGE are fine.
+- Your history ends with the thread's last finished turn. When it is running now, see what it is doing with \`bb thread log ${sourceId} --limit 40\`.
+- show_board, \`bb genui board\` and \`bb genui show-board\` act on that thread's board, not on yours.
+- Do what the request asks, then stop.`;
+}
+
+/**
  * What the board plugin sends once to an idle thread that has history but no
  * board, when its board tab is first shown (server.ts, board_start). Tagged,
  * so other plugins read it as a machine message, not the user writing.

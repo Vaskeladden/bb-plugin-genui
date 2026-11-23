@@ -53,6 +53,7 @@ import {
   type BoardVersion,
 } from "./core/board";
 import { createBoardStore } from "./board-store";
+import { COPY_PURPOSES, createCopies, THREAD_ID } from "./copies";
 import type { Value } from "./core/types";
 import {
   MAX_PATH_FILTERS,
@@ -71,11 +72,14 @@ import { examplesReport } from "./examples";
 import {
   AGENT_INSTRUCTIONS,
   AGENT_INSTRUCTIONS_WEB_OFF,
+  BOARD_BY_COPY_INSTRUCTIONS,
+  BOARD_COPY_REQUEST,
   BOARD_LAYOUT,
   BOARD_START_INSTRUCTIONS,
   BOARD_START_REQUEST,
   BOARD_UPKEEP_INSTRUCTIONS,
   CODE_WORK_INSTRUCTIONS,
+  copyInstructions,
   UI_REFERENCE,
   UI_REFERENCE_MORE,
 } from "./instructions";
@@ -274,6 +278,14 @@ export const rpcContract = defineRpcContract({
     input: z.object({ threadId: projectThread, mode: z.enum(["update", "new"]) }),
     output: z.union([z.object({ ok: z.literal(true) }), z.object({ ok: z.literal(false), message: z.string() })]),
   },
+  // Runs a request (the JB Flow plugin's Status or Ultrastatus) in a hidden
+  // background copy of the thread, which publishes to the thread's board, so
+  // the thread's own agent is not interrupted. `ok` false: bb refused to fork
+  // it (its agent can't be forked); the caller then asks the thread itself.
+  copy_run: {
+    input: z.object({ threadId: projectThread, text: z.string().min(1).max(100_000), purpose: z.enum(COPY_PURPOSES) }),
+    output: z.union([z.object({ ok: z.literal(true), copyId: z.string() }), z.object({ ok: z.literal(false), message: z.string() })]),
+  },
 });
 
 /** The plugin that owns the Ultrastatus prompt, and the method its own Ultrastatus buttons call. */
@@ -392,16 +404,19 @@ export default async function plugin(bb: BbPluginApi) {
     const { added, versions } = await boards.publish(threadId, { content, title, mode, kind, chat: await newestChatMessage(threadId) });
     boardThreads.add(threadId);
     const what = kind === "ultrastatus" ? "an Ultrastatus" : "an update (not checked again)";
+    const keep = copies.canCopy(threadId)
+      ? "A background copy keeps it current after each turn; don't publish it again yourself unless the user asks."
+      : 'Keep the board current from now on: before you end a turn in which the work moved, publish it again with mode "update" and kind "update", changing only what that turn changed.';
     return {
       ok: true,
-      text: `On the status board as version ${versionNumber(versions, added.id)} of «${added.title}», ${what}; the side panel shows it. Don't repeat its content in your reply. Keep the board current from now on: before you end a turn in which the work moved, publish it again with mode "update" and kind "update", changing only what that turn changed.`,
+      text: `On the status board as version ${versionNumber(versions, added.id)} of «${added.title}», ${what}; the side panel shows it. Don't repeat its content in your reply. ${keep}`,
     };
   }
   bb.agents.registerTool({
     name: "show_board",
     instructions: BOARD_LAYOUT,
     description:
-      "Puts a report on this thread's status board: a tab in the thread's side panel, the user's standard view of how the work is going, where a reply would scroll away. Every thread has one: make it in a thread's first turn, and keep it current: before you end a turn in which the work moved, publish it again with kind \"update\", changing only what that turn changed. Use it too when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. Pass kind \"ultrastatus\" only for an Ultrastatus request, which checks every row again; an update never counts as one. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
+      "Puts a report on this thread's status board: a tab in the thread's side panel, the user's standard view of how the work is going, where a reply would scroll away. Every thread has one. When the thread's instructions say a background copy keeps it, leave it to the copy. Otherwise make it in a thread's first turn, and keep it current: before you end a turn in which the work moved, publish it again with kind \"update\", changing only what that turn changed. Use it too when the user's message asks for the board (an Ultrastatus request does) or asks to put something in the side panel. Pass kind \"ultrastatus\" only for an Ultrastatus request, which checks every row again; an update never counts as one. `content` is what the reply would have been: markdown with ```ui and ```app blocks. Every block is checked as check_ui checks it; if one fails, nothing is stored and you get its errors. Each call is kept as a version the user can go back to. `bb genui board` prints the board that is there. The user can answer from the board: such a message opens with a line naming the board version it was picked on and, as an @thread link, the chat message that version was made after. When the work has moved on since then, print the version (`bb genui board --version <id>`), and say what has changed before you act on the answer.",
     parameters: z.object({
       content: z.string().min(1).max(MAX_BOARD_CHARS).describe("The board: markdown with ```ui and ```app blocks, as a reply would hold them"),
       title: z.string().min(1).max(MAX_BOARD_TITLE_CHARS).optional().describe("A few words naming the board; omitted, an update keeps the board's title"),
@@ -416,7 +431,7 @@ export default async function plugin(bb: BbPluginApi) {
     }),
     presentation: { label: { pending: "Updating the status board", completed: "Updated the status board" } },
     async execute({ content, title, mode, kind }, ctx) {
-      const { ok, text } = await publishBoard(ctx.threadId, { content, title: title ?? null, mode: mode ?? "update", kind: kind ?? "update" });
+      const { ok, text } = await publishBoard((await copies.sourceOf(ctx.threadId)) ?? ctx.threadId, { content, title: title ?? null, mode: mode ?? "update", kind: kind ?? "update" });
       return { content: [{ type: "text", text }], isError: !ok };
     },
   });
@@ -426,7 +441,17 @@ export default async function plugin(bb: BbPluginApi) {
   // same session resolution, so the code-work section below reaches exactly
   // the sessions that get the other three. Bounded; oldest forgotten first.
   const personThreads = new Set<string>();
+  const copies = createCopies(bb, { isPersonThread: (threadId) => personThreads.has(threadId) });
+  /** The thread whose board a command run by `threadId` acts on: a copy's source, or the thread itself. */
+  const runningFor = async (threadId: string | undefined) => (threadId === undefined ? undefined : ((await copies.sourceOf(threadId)) ?? threadId));
   bb.agents.configure((context) => {
+    // A background copy of a thread (copies.ts): the board tools, writing to the thread it copies.
+    const { copyOf, purpose } = context.pluginMetadata;
+    if (context.origin.kind === "fork" && typeof copyOf === "string" && THREAD_ID.test(copyOf)) {
+      personThreads.delete(context.thread.id);
+      copies.remember(context.thread.id, copyOf, purpose === "status" || purpose === "ultra" ? purpose : "board");
+      return { tools: ["check_ui", "ui_examples", "show_board"], skills: [], instructions: web.isOn() ? AGENT_INSTRUCTIONS : AGENT_INSTRUCTIONS_WEB_OFF };
+    }
     // Only sessions whose replies a person reads in chat: not threads another
     // agent spawned (their reply goes back to that agent) and not threads a
     // plugin runs (workflows, automations), except the user's side chats and
@@ -444,7 +469,11 @@ export default async function plugin(bb: BbPluginApi) {
   });
   // Every thread a person reads has a status board: one without is told to make it in this turn.
   bb.agents.contributeInstructions(({ threadId }) => {
+    const copyOf = copies.knownSourceOf(threadId);
+    if (copyOf !== null) return copyInstructions(copyOf);
     if (!personThreads.has(threadId)) return null;
+    // A background copy updates the board after each turn; a thread that can't be forked keeps its board itself.
+    if (copies.canCopy(threadId)) return `${CODE_WORK_INSTRUCTIONS}\n\n${BOARD_BY_COPY_INSTRUCTIONS}`;
     return `${CODE_WORK_INSTRUCTIONS}\n\n${boardThreads.has(threadId) ? BOARD_UPKEEP_INSTRUCTIONS : BOARD_START_INSTRUCTIONS}`;
   });
 
@@ -510,16 +539,23 @@ export default async function plugin(bb: BbPluginApi) {
       try {
         const thread = await bb.sdk.threads.get({ threadId });
         if (thread.archivedAt !== null) return { status: "archived" as const };
-        // A running agent makes or keeps its board before the turn ends, as its instructions say.
-        if (!force && thread.status !== "idle") return { status: "busy" as const };
+        // A background copy makes it even while the agent works; without one, a running agent
+        // makes or keeps its board before the turn ends, as its instructions say.
+        const byCopy = copies.canCopy(threadId);
+        if (!byCopy && !force && thread.status !== "idle") return { status: "busy" as const };
         if ((await newestChatMessage(threadId)) === null) return { status: "no-history" as const };
-        await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: BOARD_START_REQUEST, mentions: [] }] });
+        const copy = byCopy ? await copies.run(threadId, BOARD_COPY_REQUEST, "board") : null;
+        if (copy?.ok !== true) {
+          if (!force && thread.status !== "idle") return { status: "busy" as const };
+          await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: BOARD_START_REQUEST, mentions: [] }] });
+        }
         await bb.storage.kv.set(askedKey, { at: Date.now() });
         return { status: "asked" as const };
       } catch (cause) {
         return { status: "failed" as const, message: cause instanceof Error ? cause.message : String(cause) };
       }
     },
+    copy_run: ({ threadId, text, purpose }) => copies.run(threadId, text, purpose),
     async board_request({ threadId, mode }) {
       try {
         await bb.sdk.plugins.callRpc({
@@ -585,7 +621,7 @@ export default async function plugin(bb: BbPluginApi) {
           },
           positionals: [{ name: "thread", description: "Thread ID; defaults to the thread running the command" }],
           async run(input, ctx) {
-            const threadId = input.positionals.thread ?? ctx.threadId;
+            const threadId = input.positionals.thread ?? (await runningFor(ctx.threadId));
             if (threadId === undefined) {
               throw new PluginCliError("no thread to read the board of", {
                 code: "thread_required",
@@ -627,14 +663,15 @@ export default async function plugin(bb: BbPluginApi) {
           },
           positionals: [{ name: "file", description: "The board's file", required: true }],
           async run(input, ctx) {
-            const threadId = input.options.thread ?? ctx.threadId;
+            const threadId = input.options.thread ?? (await runningFor(ctx.threadId));
             if (threadId === undefined) {
               throw new PluginCliError("no thread to put the board on", {
                 code: "thread_required",
                 hint: "Pass a thread ID: bb genui show-board board.md --thread thr_…",
               });
             }
-            const file = await loadThreadFile(bb, threadId, input.positionals.file, { raw: true });
+            // The file is the running thread's own (a copy writes in its own storage); the board is the one it writes for.
+            const file = await loadThreadFile(bb, ctx.threadId ?? threadId, input.positionals.file, { raw: true });
             if (!file.ok) throw new PluginCliError(file.error, { code: "file_unreadable" });
             const content = typeof file.value === "string" ? file.value : "";
             if (content.length > MAX_BOARD_CHARS) {
