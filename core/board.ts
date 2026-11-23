@@ -103,6 +103,37 @@ export type BoardSegment =
   /** `index` counts the block among the board's blocks of its language, as BB counts a reply's. */
   | { readonly kind: "block"; readonly language: "ui" | "app"; readonly code: string; readonly index: number };
 
+/**
+ * Keeps every line break of a board's prose: markdown joins lines that follow
+ * each other into one paragraph, which ran the board's five «In plain words»
+ * lines together. Each line outside a code fence that another line follows
+ * ends in a hard break (two spaces); a line that already ends in one, and
+ * every line inside a fence, stays as it is.
+ */
+const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+
+export function keepLineBreaks(text: string): string {
+  const lines = text.split("\n");
+  let fence: string | null = null;
+  return lines
+    .map((line, position) => {
+      const marker = FENCE.exec(line)?.[1];
+      if (fence !== null) {
+        if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null;
+        return line;
+      }
+      if (marker !== undefined) {
+        fence = marker;
+        return line;
+      }
+      const next = lines[position + 1];
+      // Before a blank line or a fence a new block starts anyway.
+      if (line.trim() === "" || next === undefined || next.trim() === "" || FENCE.test(next) || / {2}$|\\$/.test(line)) return line;
+      return `${line}  `;
+    })
+    .join("\n");
+}
+
 /** A board's text as the prose and the ```ui / ```app blocks it holds, in order. Other fences stay in the prose. */
 export function boardSegments(content: string): BoardSegment[] {
   const lines = content.split("\n");
@@ -111,7 +142,7 @@ export function boardSegments(content: string): BoardSegment[] {
   let from = 0;
   const prose = (to: number): void => {
     const text = lines.slice(from, to).join("\n").trim();
-    if (text !== "") segments.push({ kind: "markdown", text });
+    if (text !== "") segments.push({ kind: "markdown", text: keepLineBreaks(text) });
   };
   for (const fence of findFences(lines)) {
     if (fence.language !== "ui" && fence.language !== "app") continue;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   boardOrigin,
   boardSegments,
+  keepLineBreaks,
   boardSignal,
   chatLink,
   chatMessage,
@@ -124,6 +125,21 @@ describe("a board's text", () => {
 
   it("is empty for blank text", () => {
     expect(boardSegments("  \n")).toEqual([]);
+  });
+
+  it("keeps the plain-words lines on their own lines", () => {
+    const content = ["**What we are making:** A board.", "**How far we are:** Done.", "", "Another paragraph.", "```ui", "Text(1)", "```"].join("\n");
+    expect(boardSegments(content)[0]).toEqual({
+      kind: "markdown",
+      text: "**What we are making:** A board.  \n**How far we are:** Done.\n\nAnother paragraph.",
+    });
+  });
+
+  it("leaves code fences and lines with a break of their own as they are", () => {
+    expect(keepLineBreaks(["a", "```ts", "const x = 1;", "const y = 2;", "```", "b  ", "c\\", "d"].join("\n"))).toBe(
+      ["a", "```ts", "const x = 1;", "const y = 2;", "```", "b  ", "c\\", "d"].join("\n"),
+    );
+    expect(keepLineBreaks(["~~~~", "x", "~~~", "y", "~~~~", "e", "f"].join("\n"))).toBe(["~~~~", "x", "~~~", "y", "~~~~", "e  ", "f"].join("\n"));
   });
 });
 
