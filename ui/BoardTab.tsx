@@ -6,8 +6,8 @@
 // agent makes in its first turn and keeps current (instructions.ts). A thread
 // from before that gets its first board when the tab is first shown
 // (board_start). BoardOpener, mounted with every visible thread (a thread
-// header row that takes no space), makes the board the view a thread opens
-// on, and opens it again when an Ultrastatus lands.
+// header row that takes no space), makes the board the view a thread first
+// opens on, and opens it again when an Ultrastatus lands.
 //
 // The board is where the user goes on with the work, not only where they read
 // it: Update and New board ask the agent for a fresh report, and what the user
@@ -463,13 +463,31 @@ function markSeen(threadId: string, id: string): void {
   }
 }
 
-/** Threads whose board this page load already opened on: the board is the view a thread opens on, once. */
-const openedOnArrival = new Set<string>();
+const arrivedKey = (threadId: string): string => `bb.genui.board.arrived:${threadId}`;
+
+/** Whether the board was already the view this thread opened on, in this browser. */
+function arrived(threadId: string): boolean {
+  try {
+    return window.localStorage.getItem(arrivedKey(threadId)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function markArrived(threadId: string): void {
+  try {
+    window.localStorage.setItem(arrivedKey(threadId), "1");
+  } catch {
+    // Without storage the board opens again on the next visit, as before.
+  }
+}
 
 /**
- * Makes the Status board the view a thread opens on (once per thread per page
- * load, so a user who moves to another tab keeps it), and opens it again when
- * an Ultrastatus this browser hasn't shown lands. The agent's own updates,
+ * Makes the Status board the view a thread opens on the first time this
+ * browser shows the thread, and opens it again when an Ultrastatus this
+ * browser hasn't shown lands. After that the tab the user picked stays, across
+ * visits and reloads: bb remembers it per thread, and a plugin that picked a
+ * tab on every visit or page load took it away (owner, 2026-11-24). The agent's own updates,
  * published every turn, don't pull the user away from another tab. Renders
  * nothing.
  */
@@ -484,8 +502,8 @@ export function BoardOpener({ threadId }: ExperimentalThreadHeaderRowProps): nul
   });
 
   useEffect(() => {
-    if (openedOnArrival.has(threadId)) return;
-    if (panel.openTab({ tab: BOARD_TAB })) openedOnArrival.add(threadId);
+    if (arrived(threadId)) return;
+    if (panel.openTab({ tab: BOARD_TAB })) markArrived(threadId);
   }, [panel, threadId]);
 
   return null;
