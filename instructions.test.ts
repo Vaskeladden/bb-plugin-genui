@@ -67,32 +67,37 @@ describe("agent instructions", () => {
 describe("bug tracker on the status board", () => {
   const STAGES = ["Cause found", "Fix chosen", "Solved and proven", "Reviewed and merged", "Live", "Checked on the real case", "Reporter told"];
 
-  // Every other board keeps its bar: the tracker replaces it on a thread whose whole goal is one reported bug.
-  it("leaves the bar of every other board as it was", () => {
+  // The tracker replaces the bar only on a thread whose whole goal is one reported bug; these strings name who keeps it.
+  it("keeps the bar line and names the threads that keep their bar", () => {
     expect(BOARD_LAYOUT).toContain("2. One bar of the whole job. On a bug thread, the bug tracker instead.");
     expect(BOARD_LAYOUT).toContain("A bug thread's whole goal is to fix one bug a person reported");
-    expect(BOARD_LAYOUT).toContain("A thread that triages bugs, runs a campaign, fixes a failing check or test, reviews, or builds a feature keeps its bar, also when it meets a bug.");
+    expect(BOARD_LAYOUT).toContain("Threads that triage, run a campaign, fix a check or test, review, handle an alert or incident, or build a feature keep their bar, even when they meet a bug.");
     expect(BOARD_LAYOUT).toContain("A bug thread's tracker, for example:");
   });
 
   it("names the seven stages in their order", () => {
-    const list = BOARD_LAYOUT.match(/in the user's language: ([^.]+)\./)?.[1];
+    const list = BOARD_LAYOUT.match(/in order and in the user's language: ([^.]+)\./)?.[1];
     expect(list?.split(", ")).toEqual(STAGES);
   });
 
   // The owner reads the tracker to see whether a bug is really solved, so done needs its proof.
   it("calls a stage done only with its proof", () => {
-    expect(BOARD_LAYOUT).toContain("A stage is done only with proof: a result the thread ran or read, not a statement that something passed.");
-    expect(BOARD_LAYOUT).toContain("No proof, also for a mark taken from an older board: current or not started, never done.");
-    expect(BOARD_LAYOUT).toContain("the owner's quoted word that this mechanism fixes this case (choosing the fix is not that)");
+    expect(BOARD_LAYOUT).toContain("Done needs proof: a result the thread ran or read, not a statement.");
+    expect(BOARD_LAYOUT).toContain("No proof, also for a mark from an older board: not done.");
+    expect(BOARD_LAYOUT).toContain("a test that fails on the old code with the reported wrong result and passes with the fix");
+    expect(BOARD_LAYOUT).toContain("the owner's quoted word, given after he saw the fix's result, that it fixes this case (approving a fix is not that)");
     expect(BOARD_LAYOUT).toContain("7 the message that told the reporter it is fixed.");
-    expect(BOARD_LAYOUT).toContain("Its title follows its stages in every version: «Solved, waiting for: <first stage not done>» once Solved and proven is done, else «Still solving: <first stage not done>»");
+  });
+
+  // The Card's title is the verdict the owner reads, so the board's keep rules never hold it.
+  it("puts the verdict in the Card's title in every version", () => {
+    expect(BOARD_LAYOUT).toContain("The Card's title follows its stages in every version, over any rule to keep titles or marks: «Still solving: <first stage not done>» until Solved and proven is done, then «Solved, waiting for: <first stage not done>»; all done «Solved»; closed without a fix «Closed: <why>».");
+    expect(BOARD_LAYOUT).toContain("the board's own title names the bug");
   });
 
   // «Solved» must not outlive the proof it rests on.
   it("takes Solved and proven back when its proof no longer holds", () => {
-    expect(BOARD_LAYOUT).toContain("keeps Solved and proven done only when the proof ran again on the new version");
-    expect(BOARD_LAYOUT).toContain("A check or reply that shows the bug still there, or a new fix, sets Solved and proven and every later stage back to not done.");
+    expect(BOARD_LAYOUT).toContain("A changed fix (such as after a review), a new fix, or a check or reply that shows the bug still there sets Solved and proven and every later stage back to not done until its proof runs again.");
   });
 
   // The example is what a writer copies: it must render, keep the seven stages and give every done stage its proof line.
