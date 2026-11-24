@@ -67,10 +67,12 @@ describe("agent instructions", () => {
 describe("bug tracker on the status board", () => {
   const STAGES = ["Cause found", "Fix chosen", "Solved and proven", "Reviewed and merged", "Live", "Checked on the real case", "Reporter told"];
 
-  // Every other board keeps its bar: the tracker replaces it on a bug thread only.
+  // Every other board keeps its bar: the tracker replaces it on a thread whose whole goal is one reported bug.
   it("leaves the bar of every other board as it was", () => {
     expect(BOARD_LAYOUT).toContain("2. One bar of the whole job. On a bug thread, the bug tracker instead.");
-    expect(BOARD_LAYOUT).toContain("On such a thread only, the bar's place holds one Card with Steps");
+    expect(BOARD_LAYOUT).toContain("A bug thread's whole goal is to fix one bug a person reported");
+    expect(BOARD_LAYOUT).toContain("A thread that triages bugs, runs a campaign, fixes a failing check or test, reviews, or builds a feature keeps its bar, also when it meets a bug.");
+    expect(BOARD_LAYOUT).toContain("A bug thread's tracker, for example:");
   });
 
   it("names the seven stages in their order", () => {
@@ -80,9 +82,17 @@ describe("bug tracker on the status board", () => {
 
   // The owner reads the tracker to see whether a bug is really solved, so done needs its proof.
   it("calls a stage done only with its proof", () => {
-    expect(BOARD_LAYOUT).toContain("A stage is done only when the thread's work shows its proof, and its detail gives that proof in one line");
-    expect(BOARD_LAYOUT).toContain("No proof: current or not started, never done, even when you believe it.");
-    expect(BOARD_LAYOUT).toContain("«Solved, waiting for: <first stage not done>» once Solved and proven is done, else «Still solving: <first stage not done>»");
+    expect(BOARD_LAYOUT).toContain("A stage is done only with proof: a result the thread ran or read, not a statement that something passed.");
+    expect(BOARD_LAYOUT).toContain("No proof, also for a mark taken from an older board: current or not started, never done.");
+    expect(BOARD_LAYOUT).toContain("the owner's quoted word that this mechanism fixes this case (choosing the fix is not that)");
+    expect(BOARD_LAYOUT).toContain("7 the message that told the reporter it is fixed.");
+    expect(BOARD_LAYOUT).toContain("Its title follows its stages in every version: «Solved, waiting for: <first stage not done>» once Solved and proven is done, else «Still solving: <first stage not done>»");
+  });
+
+  // «Solved» must not outlive the proof it rests on.
+  it("takes Solved and proven back when its proof no longer holds", () => {
+    expect(BOARD_LAYOUT).toContain("keeps Solved and proven done only when the proof ran again on the new version");
+    expect(BOARD_LAYOUT).toContain("A check or reply that shows the bug still there, or a new fix, sets Solved and proven and every later stage back to not done.");
   });
 
   // The example is what a writer copies: it must render, keep the seven stages and give every done stage its proof line.
