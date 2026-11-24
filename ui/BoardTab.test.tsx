@@ -25,6 +25,8 @@ const bb = vi.hoisted(() => {
     composers: [] as unknown[],
     /** The background copy working on the board, as board_get reports it. */
     copy: null as { purpose: string; since: number } | null,
+    /** When the thread the opener asks about was created. */
+    createdAt: Date.now(),
   };
   return {
     state,
@@ -59,7 +61,7 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof PluginSdkApp>()),
     useComposers: () => bb.state.composers,
-    useSdk: () => ({}),
+    useSdk: () => ({ threads: { get: async () => ({ createdAt: bb.state.createdAt }) } }),
     experimental_useAppPanel: () => bb.panel,
     useBbNavigate: () => ({}),
     useRpc: () => bb.rpc,
@@ -143,6 +145,7 @@ beforeEach(() => {
   bb.state.contents = {};
   bb.state.opened = [];
   bb.state.accepts = true;
+  bb.state.createdAt = Date.now();
   bb.state.requests = [];
   bb.state.requestResult = { ok: true };
   bb.state.copy = null;
@@ -412,6 +415,12 @@ describe("opening the tab by itself", () => {
     root = createRoot(container);
     await renderOpener("thr_arrive");
     expect(bb.state.opened).toHaveLength(1);
+  });
+
+  it("leaves an older thread on the tab bb remembers for it", async () => {
+    bb.state.createdAt = Date.now() - 2 * 60 * 60_000;
+    await renderOpener("thr_old");
+    expect(bb.state.opened).toEqual([]);
   });
 
   it("does not open the board again after a page load", async () => {
