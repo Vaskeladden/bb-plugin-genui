@@ -337,6 +337,9 @@ describe("the status board", () => {
     expect(tool?.instructions).toContain("**What I need from you:**");
     const help = await host.harness.runCli(["show-board", "--help"], { threadId: ctx.threadId });
     expect(`${help.stdout}${help.stderr}`).toContain("**What I need from you:**");
+    // The bug tracker reaches both too: Gemini threads read the help, others the tool.
+    expect(tool?.instructions).toContain("**Bug tracker.**");
+    expect(`${help.stdout}${help.stderr}`).toContain("**Bug tracker.**");
   });
 
   it("remembers the threads with a board, and those it can't copy, when it starts again", async () => {
