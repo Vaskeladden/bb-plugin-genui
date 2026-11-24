@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { darkened, shapeClassLines, sketchMermaid, sketchPalette } from "./sketch";
+import { darkened, darkenOwnColours, shapeClassLines, sketchMermaid, sketchPalette } from "./sketch";
 
 describe("darkened", () => {
   // Excalidraw's dark canvas is its white canvas through invert(93%) hue-rotate(180deg).
@@ -36,6 +36,16 @@ describe("sketchMermaid", () => {
     expect(out).toContain(`classDef sketchDecision fill:${dark.yellow}`);
     expect(out).not.toContain(sketchPalette(false).yellow);
   });
+
+  it("darkens the model's own node colours on a dark page, so its light text stays readable", () => {
+    const source = "flowchart LR\n  a[Done] --> b[Next]\n  classDef done fill:#d3f9d8,stroke:#2f9e44\n  style b fill:#FFF3BF\n  class a done";
+    const out = sketchMermaid(source, true);
+    expect(out).toContain(`classDef done fill:${darkened("#d3f9d8")},stroke:${darkened("#2f9e44")}`);
+    expect(out).toContain(`style b fill:${darkened("#fff3bf")}`);
+    expect(out).not.toContain("#d3f9d8");
+    // On a light page the model's colours stay as written.
+    expect(sketchMermaid(source)).toContain("classDef done fill:#d3f9d8,stroke:#2f9e44");
+  });
 });
 
 describe("shapeClassLines", () => {
@@ -70,5 +80,12 @@ describe("shapeClassLines", () => {
     expect(shapeClassLines("flowchart LR\n  ok{Valid?}\n  classDef hot fill:#f00")).toEqual([]);
     expect(shapeClassLines("flowchart LR\n  ok{Valid?}:::hot")).toEqual([]);
     expect(shapeClassLines("flowchart LR\n  ok{Valid?}\n  style ok fill:#f00")).toEqual([]);
+  });
+});
+
+describe("darkenOwnColours", () => {
+  it("expands three-digit colours and leaves node and edge lines alone", () => {
+    expect(darkenOwnColours("  style a fill:#fff")).toBe(`  style a fill:${darkened("#ffffff")}`);
+    expect(darkenOwnColours("  a[#fff tag] --> b")).toBe("  a[#fff tag] --> b");
   });
 });

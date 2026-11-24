@@ -150,10 +150,31 @@ export function shapeClassLines(source: string, colors: SketchPalette = LIGHT): 
   return lines;
 }
 
+/** A `classDef` or `style` line: the colours the model chose for its own nodes. */
+const OWN_COLOUR_LINE = /^\s*(?:classDef|style)\s/;
+const HEX = /#([0-9a-f]{6}|[0-9a-f]{3})\b/gi;
+
+/**
+ * The model's own node colours through the dark-theme filter. A model picks
+ * fills for a light page (`fill:#d3f9d8`); on a dark page the diagram's text is
+ * light, so a light fill would leave it unreadable.
+ */
+export function darkenOwnColours(source: string): string {
+  return source
+    .split("\n")
+    .map((line) =>
+      OWN_COLOUR_LINE.test(line)
+        ? line.replace(HEX, (_, digits: string) => darkened(`#${digits.length === 3 ? [...digits].map((d) => d + d).join("") : digits}`))
+        : line,
+    )
+    .join("\n");
+}
+
 /**
  * The source BB's Mermaid renderer gets. A diagram that brings its own front
  * matter or init directive keeps it untouched; one with its own class or style
- * lines keeps its colours but still gets the hand-drawn look. The diagram has
+ * lines keeps its colours, darkened on a dark page, and still gets the
+ * hand-drawn look. The diagram has
  * no canvas of its own: it is drawn on `backdrop`, Excalidraw's canvas colour
  * if none is given.
  */
@@ -161,5 +182,6 @@ export function sketchMermaid(source: string, dark = false, backdrop?: string): 
   const trimmed = source.trim();
   if (hasOwnStyling(trimmed)) return trimmed;
   const colors = sketchPalette(dark);
-  return [frontmatter(colors, backdrop ?? colors.canvas), trimmed, ...shapeClassLines(trimmed, colors)].join("\n");
+  const body = dark ? darkenOwnColours(trimmed) : trimmed;
+  return [frontmatter(colors, backdrop ?? colors.canvas), body, ...shapeClassLines(trimmed, colors)].join("\n");
 }
