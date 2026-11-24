@@ -21,6 +21,7 @@ import {
   useComposers,
   useRealtime,
   useRpc,
+  useSdk,
   type ExperimentalTabReference,
   type ExperimentalThreadHeaderRowProps,
   type ExperimentalThreadTabProps,
@@ -465,8 +466,12 @@ function markSeen(threadId: string, id: string): void {
 
 const arrivedKey = (threadId: string): string => `bb.genui.board.arrived:${threadId}`;
 
-/** Whether the board was already the view this thread opened on, in this browser. */
+/** Threads this page load already handled, for when the browser keeps no storage. */
+const arrivedThisLoad = new Set<string>();
+
+/** Whether this browser already decided the board's first opening for this thread. */
 function arrived(threadId: string): boolean {
+  if (arrivedThisLoad.has(threadId)) return true;
   try {
     return window.localStorage.getItem(arrivedKey(threadId)) !== null;
   } catch {
@@ -475,17 +480,23 @@ function arrived(threadId: string): boolean {
 }
 
 function markArrived(threadId: string): void {
+  arrivedThisLoad.add(threadId);
   try {
     window.localStorage.setItem(arrivedKey(threadId), "1");
   } catch {
-    // Without storage the board opens again on the next visit, as before.
+    // Without storage this page load still remembers it.
   }
 }
 
+/** A thread younger than this opens on its board; an older one keeps the tab bb remembers for it. */
+const NEW_THREAD_MS = 60 * 60_000;
+
 /**
- * Makes the Status board the view a thread opens on the first time this
- * browser shows the thread, and opens it again when an Ultrastatus this
- * browser hasn't shown lands. After that the tab the user picked stays, across
+ * Makes the Status board the view a new thread opens on (one created in the
+ * last hour, the first time this browser shows it), and opens it again when
+ * an Ultrastatus this browser hasn't shown lands. An older thread is never
+ * switched to the board on arrival: it may already have a tab the user
+ * picked. After that the tab the user picked stays, across
  * visits and reloads: bb remembers it per thread, and a plugin that picked a
  * tab on every visit or page load took it away (owner, 2026-11-24). The agent's own updates,
  * published every turn, don't pull the user away from another tab. Renders
@@ -494,6 +505,7 @@ function markArrived(threadId: string): void {
 export function BoardOpener({ threadId }: ExperimentalThreadHeaderRowProps): null {
   // The side panel of the thread this row is mounted in.
   const panel = experimental_useAppPanel();
+  const sdk = useSdk();
 
   useRealtime(BOARD_CHANNEL, (payload) => {
     const signal = boardSignal(payload);
@@ -503,8 +515,20 @@ export function BoardOpener({ threadId }: ExperimentalThreadHeaderRowProps): nul
 
   useEffect(() => {
     if (arrived(threadId)) return;
-    if (panel.openTab({ tab: BOARD_TAB })) markArrived(threadId);
-  }, [panel, threadId]);
+    let live = true;
+    void sdk.threads
+      .get({ threadId })
+      .then((result) => {
+        if (!live || arrived(threadId)) return;
+        if (Date.now() - result.createdAt > NEW_THREAD_MS) markArrived(threadId);
+        else if (panel.openTab({ tab: BOARD_TAB })) markArrived(threadId);
+      })
+      // Unknown age: leave the tab alone; the next visit asks again.
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [panel, sdk, threadId]);
 
   return null;
 }
