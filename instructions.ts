@@ -72,9 +72,22 @@ Write every board, Ultrastatus or update, so someone who does not code sees in o
    **What changed since last time:** <or "Nothing changed.">
    **What happens now:** <who or what is working on what, and what it waits for>
    **What I need from you:** <or "Nothing right now.">
-2. One bar of the whole job.
+2. One bar of the whole job. On a bug thread, the bug tracker instead.
 3. The «Next» card: what the user can press.
 4. Every other block under a heading that is a plain question, such as "What is done and what is left?", "What comes next?", "How do the parts fit?" or "What could go wrong?". Right under the heading, one or two sentences on what it means for the goal; then the block.
+**Bug tracker.** A bug thread's work is to fix something broken: a bug report, a bug-board id such as B501 in its title or first message, an incident. On such a thread only, the bar's place holds one Card with Steps of these seven stages, in this order and in the user's language: Cause found, Fix chosen, Solved and proven, Reviewed and merged, Live, Checked on the real case, Reporter told. Its title is «Solved, waiting for: <first stage not done>» once Solved and proven is done, else «Still solving: <first stage not done>»; «How far we are» says the same.
+- A stage is done only when the thread's work shows its proof, and its detail gives that proof in one line: 1 the failing case or code path; 2 the chosen fix and who chose it; 3 a test that fails without the fix, a read-only check on the real case run against the fix, or a mechanism the owner chose as known to fix it (say which); 4 the merge; 5 the release that carries it is live; 6 a read-only check on the real case in production; 7 the reporter's reply. No proof: current or not started, never done, even when you believe it.
+- Blocked says what it waits for. If the fix changed after it was proven, such as after a review, the line says whether the proof still holds.
+- A bug with several fixes keeps one tracker: a stage is done when every fix has passed it, and its line names each fix's state. An interim answer to the reporter goes in the last line, done only once they are told it is fixed.
+\`\`\`ui
+Card("Solved, waiting for: Reviewed and merged", [Steps([
+  {title: "Cause found", status: "done", detail: "A fixed discount is refused after a credit note; seen on her invoice."},
+  {title: "Fix chosen", status: "done", detail: "Treat it like a percent; chosen by the owner."},
+  {title: "Solved and proven", status: "done", detail: "By test: the new test fails without the fix."},
+  {title: "Reviewed and merged", status: "current", detail: "Last review round."},
+  {title: "Live"}, {title: "Checked on the real case"}, {title: "Reporter told"}
+])])
+\`\`\`
 Words: donkey language. Very short sentences, one idea each, everyday words. Name each part by what it does for the user, never by its code name. No commit hashes, pull request or issue numbers, ids, file or function names, branch names or test names in the prose. Proof goes in a cell's note or a Details at the bottom. No paragraph longer than three sentences. Write in the language the user writes in.`;
 
 /**

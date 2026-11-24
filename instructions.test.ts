@@ -63,3 +63,39 @@ describe("agent instructions", () => {
     }
   });
 });
+
+describe("bug tracker on the status board", () => {
+  const STAGES = ["Cause found", "Fix chosen", "Solved and proven", "Reviewed and merged", "Live", "Checked on the real case", "Reporter told"];
+
+  // Every other board keeps its bar: the tracker replaces it on a bug thread only.
+  it("leaves the bar of every other board as it was", () => {
+    expect(BOARD_LAYOUT).toContain("2. One bar of the whole job. On a bug thread, the bug tracker instead.");
+    expect(BOARD_LAYOUT).toContain("On such a thread only, the bar's place holds one Card with Steps");
+  });
+
+  it("names the seven stages in their order", () => {
+    const list = BOARD_LAYOUT.match(/in the user's language: ([^.]+)\./)?.[1];
+    expect(list?.split(", ")).toEqual(STAGES);
+  });
+
+  // The owner reads the tracker to see whether a bug is really solved, so done needs its proof.
+  it("calls a stage done only with its proof", () => {
+    expect(BOARD_LAYOUT).toContain("A stage is done only when the thread's work shows its proof, and its detail gives that proof in one line");
+    expect(BOARD_LAYOUT).toContain("No proof: current or not started, never done, even when you believe it.");
+    expect(BOARD_LAYOUT).toContain("«Solved, waiting for: <first stage not done>» once Solved and proven is done, else «Still solving: <first stage not done>»");
+  });
+
+  // The example is what a writer copies: it must render, keep the seven stages and give every done stage its proof line.
+  it("carries an example tracker that renders and gives every done stage its proof", () => {
+    const example = BOARD_LAYOUT.match(/```ui\n([\s\S]*?)\n```/)?.[1];
+    expect(example).toBeDefined();
+    const compiled = compile(example!);
+    expect(formatDiagnostics(compiled.diagnostics), example).toBe("");
+    const data = new Map<string, LoadedData>();
+    expect(evaluate(compiled.program!, initialState(compiled.program!, data), data).diagnostics).toEqual([]);
+    const steps = [...example!.matchAll(/\{title: "([^"]+)"(?:, status: "(\w+)")?(?:, detail: "([^"]*)")?\}/g)];
+    expect(steps.map((step) => step[1])).toEqual(STAGES);
+    for (const [, title, status, detail] of steps) if (status === "done") expect(detail?.trim(), title).toBeTruthy();
+    expect(example).toContain('Card("Solved, waiting for: Reviewed and merged"');
+  });
+});
