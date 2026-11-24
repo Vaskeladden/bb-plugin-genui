@@ -405,14 +405,20 @@ describe("going on with the work from the board", () => {
 });
 
 describe("opening the tab by itself", () => {
-  // The opener opens a thread's board once per page load, so each test has its own thread.
-  it("makes the board the view a thread opens on, once per page load", async () => {
+  it("makes the board the view a thread first opens on, and leaves the user's tab alone after that", async () => {
     await renderOpener("thr_arrive");
     expect(bb.state.opened).toEqual([BOARD_OPEN]);
     act(() => root.unmount());
     root = createRoot(container);
     await renderOpener("thr_arrive");
     expect(bb.state.opened).toHaveLength(1);
+  });
+
+  it("does not open the board again after a page load", async () => {
+    // A page load empties every module; what this browser stored stays.
+    window.localStorage.setItem("bb.genui.board.arrived:thr_reloaded", "1");
+    await renderOpener("thr_reloaded");
+    expect(bb.state.opened).toEqual([]);
   });
 
   it("tries the first open again on the next visit when BB declined it", async () => {
