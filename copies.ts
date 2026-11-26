@@ -39,6 +39,11 @@ export const BOARD_GAP_MS = 10 * 60_000;
 export const NO_COPY_MS = 24 * 60 * 60_000;
 
 const recordSchema = z.object({ sourceId: z.string().regex(THREAD_ID), purpose: z.enum(COPY_PURPOSES), at: z.number() });
+/** The longest copy report kept for "Your next move"; a report is far shorter. */
+export const COPY_REPORT_MAX = 40_000;
+const reportSchema = z.object({ copyId: z.string(), at: z.number(), text: z.string() });
+/** A Status or Ultrastatus copy's reply, kept until the thread's own agent replies again. */
+export type CopyReport = z.infer<typeof reportSchema>;
 type CopyRecord = z.infer<typeof recordSchema>;
 
 export type CopyResult = { ok: true; copyId: string } | { ok: false; message: string };
@@ -59,6 +64,7 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
   const copyKey = (id: string) => `copy:${id}`;
   const refusedKey = (id: string) => `noCopy:${id}`;
   const dueKey = (id: string) => `boardDue:${id}`;
+  const reportKey = (id: string) => `copyReport:${id}`;
   const error = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
   async function recordOf(copyId: string): Promise<CopyRecord | null> {
@@ -149,8 +155,13 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
         // A copy created with its request never idles before that request has run; an empty
         // reply (only tool calls) still ends it.
         if (lastAssistantText === null && Date.now() - record.at < 5_000) return;
-        if (running.get(record.sourceId)?.copyId === thread.id) {
-          running.delete(record.sourceId);
+        // A Status or Ultrastatus report asks in the source's "Your next move" until its own agent replies.
+        const report = (lastAssistantText ?? "").trim();
+        if (record.purpose !== "board" && report !== "") {
+          await bb.storage.kv.set(reportKey(record.sourceId), { copyId: thread.id, at: Date.now(), text: report.slice(0, COPY_REPORT_MAX) } satisfies CopyReport);
+        }
+        if (running.get(record.sourceId)?.copyId === thread.id || (record.purpose !== "board" && report !== "")) {
+          if (running.get(record.sourceId)?.copyId === thread.id) running.delete(record.sourceId);
           bb.realtime.publish(BOARD_COPY_CHANNEL, { threadId: record.sourceId });
         }
         known.delete(thread.id);
@@ -161,6 +172,11 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
         await done.catch((cause: unknown) => bb.log.warn(`copy: could not put ${thread.id} away: ${error(cause)}`));
         if (again.delete(record.sourceId)) await updateBoard(record.sourceId);
         return;
+      }
+      // The thread's own agent replied: a copy's report no longer asks.
+      if (((await bb.storage.kv.get(reportKey(thread.id))) ?? null) !== null) {
+        await bb.storage.kv.delete(reportKey(thread.id));
+        bb.realtime.publish(BOARD_COPY_CHANNEL, { threadId: thread.id });
       }
       if (thread.archivedAt !== null || !isPersonThread(thread.id) || !canCopy(thread.id)) return;
       await updateBoard(thread.id);
@@ -207,6 +223,11 @@ export function createCopies(bb: BbPluginApi, { isPersonThread }: { isPersonThre
       const busy = running.get(sourceId);
       if (busy === undefined || Date.now() - busy.at >= COPY_STALE_MS) return null;
       return { purpose: known.get(busy.copyId)?.purpose ?? "board", since: busy.at };
+    },
+    /** The newest Status or Ultrastatus report a copy wrote for this thread since its own agent last replied; null when none. */
+    async reportFor(sourceId: string): Promise<CopyReport | null> {
+      const parsed = reportSchema.safeParse(await bb.storage.kv.get(reportKey(sourceId)));
+      return parsed.success ? parsed.data : null;
     },
     /** The thread a copy writes for: its source when `threadId` is a copy, else null. */
     async sourceOf(threadId: string): Promise<string | null> {

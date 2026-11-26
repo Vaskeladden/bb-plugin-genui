@@ -8,13 +8,18 @@
 // another thread's message after the question leaves it open here.
 //
 // While the agent's turn runs, only questions from earlier turns show: the
-// running turn's text is still being written.
+// running turn's text is still being written. A Status or Ultrastatus report
+// a background copy wrote (copies.ts) asks here too, until the thread's own
+// agent replies; its answer says which report it answers.
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from "react";
-import { useComposer, useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
+import { useComposer, useRealtime, useRpc, useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { compile } from "../core";
 import { boardSegments } from "../core/board";
 import { asksQuestion } from "../core/questions";
+import { BOARD_COPY_CHANNEL } from "../board-channel";
+import type { CopyReport } from "../copies";
+import type { rpcContract } from "../server";
 import { Fence, useThreadActions } from "./Fence";
 import { nextMoveKey, showInNextMove } from "./nextMove";
 import type { OpenReplies } from "./supersession";
@@ -26,6 +31,8 @@ export interface QuestionBlock {
   /** The block's index among the message's ```ui blocks, as BB counts them. */
   readonly index: number;
   readonly code: string;
+  /** For a block not in the thread (a background copy's report): the line put above its answers. */
+  readonly origin?: string;
 }
 
 /** The ```ui blocks of a reply's text that ask something; a block that does not compile asks nothing. */
@@ -35,6 +42,41 @@ export function questionBlocks(messageId: string, text: string): QuestionBlock[]
     const { program } = compile(segment.code);
     return program !== null && asksQuestion(program) ? [{ messageId, index: segment.index, code: segment.code }] : [];
   });
+}
+
+/** The message id a copy's report stands under: not a row of the thread, so its answers are keyed apart. */
+const copyMessageId = (copyId: string): string => `copy:${copyId}`;
+
+/** The line above answers to a copy's report: the thread's own agent never saw that report. */
+export function copyOrigin(report: Pick<CopyReport, "copyId" | "at">): string {
+  const at = new Date(report.at).toISOString().slice(11, 16);
+  return `Answering the status report a background copy of you wrote at ${at} UTC, which is not in your history. Read it first: \`bb thread output ${report.copyId}\``;
+}
+
+/** The questions of the report a background copy wrote for this thread, read again whenever a copy starts or ends. */
+function useCopyQuestions(threadId: string, running: boolean): readonly QuestionBlock[] {
+  const rpc = useRpc<typeof rpcContract>();
+  const [tick, setTick] = useState(0);
+  const [blocks, setBlocks] = useState<{ threadId: string; blocks: readonly QuestionBlock[] }>({ threadId, blocks: NO_BLOCKS });
+  useRealtime(BOARD_COPY_CHANNEL, (payload) => {
+    if ((payload as { threadId?: unknown } | null)?.threadId === threadId) setTick((count) => count + 1);
+  });
+  useEffect(() => {
+    let live = true;
+    rpc.call("copy_report", { threadId }).then(
+      (report) => {
+        if (!live) return;
+        const found = report === null ? NO_BLOCKS : questionBlocks(copyMessageId(report.copyId), report.text).map((block) => ({ ...block, origin: copyOrigin(report) }));
+        setBlocks({ threadId, blocks: found });
+      },
+      // A failed read keeps what is shown.
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [rpc, threadId, running, tick]);
+  return blocks.threadId === threadId ? blocks.blocks : NO_BLOCKS;
 }
 
 /** The most turns one timeline page is asked for. */
@@ -168,7 +210,10 @@ function useQuestionInView(blocks: readonly QuestionBlock[], folded: boolean): R
 }
 
 function OpenQuestions({ threadId, running }: { threadId: string; running: boolean }): ReactElement | null {
-  const blocks = useQuestionBlocks(threadId, useOpenReplies(threadId, running));
+  const replyBlocks = useQuestionBlocks(threadId, useOpenReplies(threadId, running));
+  // A copy's report came after the thread's last reply (its own agent's next reply drops it): it asks now.
+  const copyBlocks = useCopyQuestions(threadId, running);
+  const blocks = copyBlocks.length > 0 ? copyBlocks : replyBlocks;
   const actions = useThreadActions();
   const [folded, setFolded] = useState(() => readFolded(threadId));
   useEffect(() => setFolded(readFolded(threadId)), [threadId]);
@@ -215,6 +260,7 @@ function OpenQuestions({ threadId, running }: { threadId: string; running: boole
                 messageId={block.messageId}
                 fence={block.index}
                 actions={actions}
+                origin={block.origin}
               />
             </div>
           ))}
