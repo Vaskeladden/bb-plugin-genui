@@ -252,3 +252,34 @@ export function useSmoothHeight<O extends HTMLElement, I extends HTMLElement>():
   }, []);
   return { outer, inner };
 }
+
+/**
+ * Glides `element` from `fromPx` tall to the height it has now, fading its
+ * content in: for a box whose content was swapped at once (a reply's question
+ * folding to one line when Your next move takes it). Holds still under
+ * reduced motion.
+ */
+export function glideFrom(element: HTMLElement, fromPx: number): Animation | null {
+  const to = element.getBoundingClientRect().height;
+  if (reducedMotion() || typeof element.animate !== "function" || Math.abs(to - fromPx) < 1) return null;
+  return element.animate(
+    [
+      { height: `${fromPx}px`, opacity: 0.4, overflow: "clip" },
+      { height: `${to}px`, opacity: 1, overflow: "clip" },
+    ],
+    { duration: 420, easing: EASE_OUT_EXPO },
+  );
+}
+
+/** Opens a box that just appeared: its height grows from nothing while it rises in. */
+export function openFromNothing(element: HTMLElement): Animation | null {
+  const to = element.getBoundingClientRect().height;
+  if (reducedMotion() || typeof element.animate !== "function" || to < 1) return null;
+  return element.animate(
+    [
+      { height: "0px", opacity: 0, transform: "translateY(8px)", overflow: "clip" },
+      { height: `${to}px`, opacity: 1, transform: "none", overflow: "clip" },
+    ],
+    { duration: 420, easing: EASE_OUT_EXPO },
+  );
+}

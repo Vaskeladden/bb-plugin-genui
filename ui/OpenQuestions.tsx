@@ -11,7 +11,7 @@
 // running turn's text is still being written. A Status or Ultrastatus report
 // a background copy wrote (copies.ts) asks here too, until the thread's own
 // agent replies; its answer says which report it answers.
-import { useEffect, useRef, useState, type ReactElement, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type RefObject } from "react";
 import { useComposer, useRealtime, useRpc, useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { compile } from "../core";
@@ -22,6 +22,7 @@ import type { CopyReport } from "../copies";
 import type { rpcContract } from "../server";
 import { Fence, useThreadActions } from "./Fence";
 import { nextMoveKey, showInNextMove } from "./nextMove";
+import { openFromNothing } from "./components/motion";
 import type { OpenReplies } from "./supersession";
 import { useOpenReplies } from "./useSuperseded";
 
@@ -209,6 +210,32 @@ function useQuestionInView(blocks: readonly QuestionBlock[], folded: boolean): R
   return scroller;
 }
 
+/**
+ * Opens the box smoothly when a question arrives while the message field is
+ * on screen (a turn ended), as the reply's copy glides shut. A box that is
+ * already there when the thread opens holds still.
+ */
+const OPEN_SETTLE_MS = 1500;
+
+function useOpensSmoothly(open: boolean): RefObject<HTMLElement | null> {
+  const box = useRef<HTMLElement | null>(null);
+  const wasClosed = useRef(false);
+  const mountedAt = useRef(performance.now());
+  useLayoutEffect(() => {
+    if (!open) {
+      wasClosed.current = true;
+      return;
+    }
+    // The thread's first load also arrives a moment after the box mounts: that holds still.
+    const settled = performance.now() - mountedAt.current > OPEN_SETTLE_MS;
+    if (!wasClosed.current || !settled || box.current === null) return;
+    wasClosed.current = false;
+    const animation = openFromNothing(box.current);
+    return () => animation?.cancel();
+  }, [open]);
+  return box;
+}
+
 function OpenQuestions({ threadId, running }: { threadId: string; running: boolean }): ReactElement | null {
   const replyBlocks = useQuestionBlocks(threadId, useOpenReplies(threadId, running));
   // A copy's report came after the thread's last reply (its own agent's next reply drops it): it asks now.
@@ -221,6 +248,7 @@ function OpenQuestions({ threadId, running }: { threadId: string; running: boole
   // Folded, the box shows no block: the reply keeps its own copy open.
   const keys = folded ? "" : blocks.map((block) => nextMoveKey(block.messageId, block.index)).join("\n");
   useEffect(() => (keys === "" ? undefined : showInNextMove(keys.split("\n"))), [keys]);
+  const box = useOpensSmoothly(blocks.length > 0);
   if (blocks.length === 0) return null;
   const toggle = (): void => {
     const next = !folded;
@@ -233,7 +261,7 @@ function OpenQuestions({ threadId, running }: { threadId: string; running: boole
     }
   };
   return (
-    <section aria-label="Your next move" data-genui-open-questions="" className="mb-1 flex min-w-0 flex-col rounded-lg border border-border bg-background">
+    <section ref={box} aria-label="Your next move" data-genui-open-questions="" className="mb-1 flex min-w-0 flex-col rounded-lg border border-border bg-background">
       <button
         type="button"
         aria-expanded={!folded}
