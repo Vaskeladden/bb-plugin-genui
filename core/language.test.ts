@@ -210,6 +210,32 @@ describe("compile errors", () => {
     expect(errors(`$seats = 1\nText($seat)`)[0]).toContain("unknown state `$seat`");
   });
 
+  it("starts an undeclared input's state empty", () => {
+    // The form that failed in a reply on 2026-11-26: two Radios, neither state declared.
+    const source = `Card("Q", [Form([
+  Radio($colours, [{value: "Keep them"}, {value: "Undo them"}], label: "Colours?"),
+  Radio($gap, ["Close it", "Not now"], label: "Gap?")
+])])`;
+    const { program, diagnostics } = compile(source);
+    expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    expect(initialState(program!)).toEqual({ colours: "", gap: "" });
+    const empties = compile(
+      `Stack([Checklist($a, ["x"]), Toggle($b, "B"), Slider($c, 5, 10), Stepper($d), Rating($e), Input($f), EditableTable($g, ["k"])])`,
+    );
+    expect(initialState(empties.program!)).toEqual({ a: [], b: false, c: 5, d: 0, e: 0, f: "", g: [] });
+  });
+
+  it("ignores source: on a component that shows none, with a warning", () => {
+    const { program, diagnostics } = compile(`Card("Sales", [Text("x")], source: "illustrative")`);
+    expect(program).not.toBeNull();
+    expect(diagnostics).toEqual([expect.objectContaining({ severity: "warning", message: expect.stringContaining("shows no `source:`") })]);
+    expect(errors(`Card("Sales", [Text("x")], sauce: "x")`)[0]).toContain("has no parameter `sauce`");
+  });
+
+  it("keeps a typo of a declared state an error, even on an input", () => {
+    expect(errors(`$seats = 1\nSlider($seat, 0, 10)`)[0]).toContain("Did you mean `$seats`?");
+  });
+
   it("requires bindings written as $name", () => {
     expect(errors(`$n = 1\nSlider($n + 1, 0, 10)`)[0]).toContain("must be a state variable written as `$name`");
     expect(errors(`$n = 1\nSlider(n, 0, 10)`)).toEqual(["`n` is not defined. Did you mean `$n`?"]);
