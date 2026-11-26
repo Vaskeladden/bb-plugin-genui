@@ -7,13 +7,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type * as PluginSdkApp from "@get-bb/plugin-sdk/app";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OpenQuestionsBanner, questionBlocks } from "./OpenQuestions";
+import { copyOrigin, OpenQuestionsBanner, questionBlocks } from "./OpenQuestions";
+import { isMachineMessage } from "./supersession";
 import { useInNextMove } from "./nextMove";
 
 const ASK = '```ui\nCard("Caching", [Button("Use in memory"), Button("Use Redis")])\n```';
 const REPORT = '```ui\nCard("Result", [Metric("Tests", "494")])\n```';
 
-const { sdk, scope } = vi.hoisted(() => {
+const { sdk, rpc, scope } = vi.hoisted(() => {
   type Row = { id: string; role: "assistant" | "user"; text: string };
   const user = (thread: string, seq: number, text: string): Row => ({ id: `${thread}:user-seed:${seq}`, role: "user", text });
   const reply = (thread: string, n: number, text: string): Row => ({ id: `${thread}:assistant:${n}`, role: "assistant", text });
@@ -61,7 +62,14 @@ const { sdk, scope } = vi.hoisted(() => {
       }),
     },
   };
-  return { sdk, scope: { current: { kind: "thread", threadId: "pushed" } as { kind: string; threadId?: string }, running: false } };
+  // Reports a background Status copy wrote, by the thread it copies.
+  const reports: Record<string, { copyId: string; at: number; text: string }> = {
+    copied: { copyId: "thr_copy1", at: Date.UTC(2026, 10, 26, 21, 40), text: '**Goal:** Ship\n\n```ui\nCard("Ship it?", [Button("shipit · merge"), Button("Wait")])\n```' },
+  };
+  threads.copied = [user("copied", 1, "Plan the cache"), reply("copied", 1, `Which one?\n\n${ask}`)];
+  // One client, as BB hands out: a new one per render would read again on every render.
+  const rpc = { call: (_method: string, { threadId }: { threadId: string }) => Promise.resolve(reports[threadId] ?? null) };
+  return { sdk, rpc, reports, scope: { current: { kind: "thread", threadId: "pushed" } as { kind: string; threadId?: string }, running: false } };
 });
 
 vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
@@ -70,7 +78,8 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
   useComposers: () => [],
   useSdk: () => sdk,
   useBbNavigate: () => ({}),
-  useRpc: () => ({ call: vi.fn() }),
+  useRpc: () => rpc,
+  useRealtime: () => {},
   useSettings: () => ({ values: { animations: false }, isLoading: false }),
   experimental_Icon: () => <span aria-hidden="true" />,
 }));
@@ -125,6 +134,14 @@ describe("questionBlocks", () => {
   });
 });
 
+describe("copyOrigin", () => {
+  it("tells the agent which report an answer is for, and is not taken for a machine message", () => {
+    const line = copyOrigin({ copyId: "thr_copy1", at: Date.UTC(2026, 10, 26, 21, 40) });
+    expect(line).toBe("Answering the status report a background copy of you wrote at 21:40 UTC, which is not in your history. Read it first: `bb thread output thr_copy1`");
+    expect(isMachineMessage(`${line}\nshipit · merge`)).toBe(false);
+  });
+});
+
 describe("OpenQuestionsBanner", () => {
   it("shows a question a machine message pushed up the thread, as the reply's own block", async () => {
     await show("pushed");
@@ -167,6 +184,13 @@ describe("OpenQuestionsBanner", () => {
     act(() => banner()?.querySelector("button")?.click());
     expect(inBox).toBe(false);
     act(() => probe.unmount());
+  });
+
+  it("shows the questions of a background Status copy's report before the thread's own", async () => {
+    await show("copied");
+    const labels = [...container.querySelectorAll('[data-genui-renderer="composer"] button')].map((button) => button.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["shipit · merge", "Wait"]));
+    expect(labels).not.toContain("Use Redis");
   });
 
   it("shows nothing once the user has written since", async () => {

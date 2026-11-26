@@ -289,6 +289,12 @@ export const rpcContract = defineRpcContract({
     input: z.object({ threadId: projectThread, text: z.string().min(1).max(100_000), purpose: z.enum(COPY_PURPOSES) }),
     output: z.union([z.object({ ok: z.literal(true), copyId: z.string() }), z.object({ ok: z.literal(false), message: z.string() })]),
   },
+  // The report a Status or Ultrastatus copy wrote for this thread since its own
+  // agent last replied, for "Your next move"; null when there is none.
+  copy_report: {
+    input: z.object({ threadId: projectThread }),
+    output: z.object({ copyId: z.string(), at: z.number(), text: z.string() }).nullable(),
+  },
 });
 
 /** The plugin that owns the Ultrastatus prompt, and the method its own Ultrastatus buttons call. */
@@ -588,6 +594,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
     },
     copy_run: ({ threadId, text, purpose }) => copies.run(threadId, text, purpose),
+    copy_report: ({ threadId }) => copies.reportFor(threadId),
     async board_request({ threadId, mode }) {
       try {
         await bb.sdk.plugins.callRpc({

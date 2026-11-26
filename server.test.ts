@@ -292,6 +292,26 @@ describe("the status board", () => {
     expect(forks()).toBe(3);
   });
 
+  it("keeps a Status copy's report for Your next move until the thread's own agent replies", async () => {
+    const { host } = await start();
+    host.harness.sdk.stub("threads.fork", async () => ({ id: "thr_status01" }));
+    host.harness.sdk.stub("threads.archive", async () => ({ ok: true }));
+    const report = () => host.harness.callRpc("copy_report", { threadId: ctx.threadId });
+    const idle = (id: string, text: string | null) => host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id }), lastAssistantText: text });
+
+    expect(await report()).toBeNull();
+    await host.harness.callRpc("copy_run", { threadId: ctx.threadId, text: "Status", purpose: "status" });
+    const text = '**Goal:** Ship\n\n```ui\nCard("Ship it?", [Button("shipit · merge"), Button("Wait")])\n```';
+    await idle("thr_status01", text);
+    expect(await report()).toEqual({ copyId: "thr_status01", at: expect.any(Number), text });
+    expect(host.harness.sdk.callsTo("threads.archive").at(-1)?.[0]).toMatchObject({ threadId: "thr_status01" });
+    const signals = host.harness.realtimeSignals.filter((signal) => signal.channel === "board-copy").length;
+
+    await idle(ctx.threadId, "Merged.");
+    expect(await report()).toBeNull();
+    expect(host.harness.realtimeSignals.filter((signal) => signal.channel === "board-copy").length).toBeGreaterThan(signals);
+  });
+
   it("skips a planned board update of a thread archived while it waited, and keeps one across a reload", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const host = createFakePluginHost({ pluginId: "genui" });
