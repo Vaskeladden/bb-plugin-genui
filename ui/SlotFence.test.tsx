@@ -141,6 +141,39 @@ describe("the Animations setting", () => {
     expect(animate).not.toHaveBeenCalled();
   });
 
+  it("glides a reply's question shut when Your next move takes it, and holds still when it mounts folded", () => {
+    // A full block is 200 px tall, its folded pointer 24 px.
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return { height: this.hasAttribute("data-genui-in-next-move") ? 24 : 200 } as DOMRect;
+    });
+    const heights = () =>
+      animate.mock.calls
+        .map(([keyframes]) => keyframes as unknown as Keyframe[])
+        .filter((keyframes) => keyframes[0]?.height !== undefined)
+        .map((keyframes) => keyframes.map((frame) => frame.height));
+    const code = 'Card("Caching", [Button("Use in memory"), Button("Use Redis")])';
+    render("ui", "closed", code, "glide:assistant:1");
+    expect(heights()).toEqual([]);
+    let release = () => {};
+    act(() => {
+      release = showInNextMove([nextMoveKey("glide:assistant:1", 0)]);
+    });
+    expect(container.textContent).toContain("Answer in Your next move below");
+    expect(heights()).toEqual([["200px", "24px"]]);
+    act(() => release());
+
+    // Another reply, mounting (scrolled back into view) while the box already holds it.
+    act(() => root.unmount());
+    root = createRoot(container);
+    animate.mockClear();
+    const held = showInNextMove([nextMoveKey("folded:assistant:1", 0)]);
+    render("ui", "closed", code, "folded:assistant:1");
+    expect(container.textContent).toContain("Answer in Your next move below");
+    expect(heights()).toEqual([]);
+    act(() => held());
+    rect.mockRestore();
+  });
+
   it("follows the setting while the block is on screen", () => {
     render("ui", "closed", 'Text("Hello")', "live:assistant:1");
     expect(container.querySelector("[data-genui-motion]")).toBeNull();

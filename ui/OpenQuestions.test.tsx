@@ -69,7 +69,7 @@ const { sdk, rpc, scope } = vi.hoisted(() => {
   threads.copied = [user("copied", 1, "Plan the cache"), reply("copied", 1, `Which one?\n\n${ask}`)];
   // One client, as BB hands out: a new one per render would read again on every render.
   const rpc = { call: (_method: string, { threadId }: { threadId: string }) => Promise.resolve(reports[threadId] ?? null) };
-  return { sdk, rpc, reports, scope: { current: { kind: "thread", threadId: "pushed" } as { kind: string; threadId?: string }, running: false } };
+  return { sdk, rpc, reports, scope: { current: { kind: "thread", threadId: "pushed" } as { kind: string; threadId?: string }, running: false, animations: false } };
 });
 
 vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
@@ -80,7 +80,7 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
   useBbNavigate: () => ({}),
   useRpc: () => rpc,
   useRealtime: () => {},
-  useSettings: () => ({ values: { animations: false }, isLoading: false }),
+  useSettings: () => ({ values: { animations: scope.animations }, isLoading: false }),
   experimental_Icon: () => <span aria-hidden="true" />,
 }));
 
@@ -184,6 +184,36 @@ describe("OpenQuestionsBanner", () => {
     act(() => banner()?.querySelector("button")?.click());
     expect(inBox).toBe(false);
     act(() => probe.unmount());
+  });
+
+  it("slides open when a turn ends with a question, and holds still when the thread opens with one", async () => {
+    scope.animations = true;
+    const animate = vi.fn(() => ({ cancel() {} }));
+    Object.defineProperty(Element.prototype, "animate", { configurable: true, value: animate });
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ height: 120, top: 0, bottom: 120 } as DOMRect);
+    const opened = () => animate.mock.calls.filter(([keyframes]) => (keyframes as unknown as Keyframe[])[0]?.height === "0px").length;
+    try {
+      await show("newest");
+      expect(banner()).not.toBeNull();
+      expect(opened()).toBe(0);
+      act(() => root.unmount());
+      root = createRoot(container);
+
+      const now = vi.spyOn(performance, "now");
+      now.mockReturnValue(1_000);
+      await show("newest", true);
+      expect(banner()).toBeNull();
+      // The turn ends a while after the thread opened.
+      now.mockReturnValue(10_000);
+      await show("newest", false);
+      expect(banner()).not.toBeNull();
+      expect(opened()).toBe(1);
+      now.mockRestore();
+    } finally {
+      rect.mockRestore();
+      Reflect.deleteProperty(Element.prototype, "animate");
+      scope.animations = false;
+    }
   });
 
   it("shows the questions of a background Status copy's report before the thread's own", async () => {
