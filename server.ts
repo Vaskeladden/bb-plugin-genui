@@ -37,6 +37,7 @@ import {
   sketchFontDataUrl,
 } from "./data-source";
 import { checkApp, MAX_APP_CHARS } from "./core/appLint";
+import { MAX_REPAIRS_IN_A_ROW, repairRequest, unrenderedBlocks } from "./core/reply-check";
 import { checkSpec, renderReplyMarkdown } from "./fallback";
 import {
   boardSegments,
@@ -444,6 +445,35 @@ export default async function plugin(bb: BbPluginApi) {
   // the sessions that get the other three. Bounded; oldest forgotten first.
   const personThreads = new Set<string>();
   const copies = createCopies(bb, { isPersonThread: (threadId) => personThreads.has(threadId) });
+  // A reply whose ```ui block does not compile shows the user an error box in
+  // place of the block. When such a turn ends, the thread is asked once to
+  // send the reply again with the block fixed; MAX_REPAIRS_IN_A_ROW stops a
+  // block the agent cannot fix from asking forever. Copies publish through
+  // show_board, which checks every block before it stores anything.
+  const repairs = new Map<string, number>();
+  bb.events.on("thread.idle", async ({ thread, lastAssistantText }) => {
+    try {
+      if (lastAssistantText === null || thread.archivedAt !== null || thread.visibility === "hidden") return;
+      if ((await copies.sourceOf(thread.id)) !== null) return;
+      const failures = unrenderedBlocks(lastAssistantText);
+      if (failures.length === 0) {
+        repairs.delete(thread.id);
+        return;
+      }
+      const asked = repairs.get(thread.id) ?? 0;
+      // A message the user already queued runs next and gets a new reply anyway.
+      if (asked >= MAX_REPAIRS_IN_A_ROW || thread.queuedMessageCount > 0) return;
+      repairs.set(thread.id, asked + 1);
+      await bb.sdk.threads.send({
+        threadId: thread.id,
+        mode: "queue-if-active",
+        originPluginId: bb.pluginId,
+        input: [{ type: "text", text: repairRequest(failures), mentions: [] }],
+      });
+    } catch (cause) {
+      bb.log.warn(`repair: could not ask ${thread.id} to fix its reply's UI: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  });
   /** The thread whose board a command run by `threadId` acts on: a copy's source, or the thread itself. */
   const runningFor = async (threadId: string | undefined) => (threadId === undefined ? undefined : ((await copies.sourceOf(threadId)) ?? threadId));
   bb.agents.configure((context) => {

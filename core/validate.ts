@@ -183,6 +183,83 @@ export function didYouMean(name: string, candidates: Iterable<string>, render = 
   return best === undefined ? "" : ` Did you mean \`${render(best)}\`?`;
 }
 
+/** What an input starts as when its state was never declared: empty, so a question starts unanswered. */
+const EMPTY_INPUT: Record<StateKind, (pos: Pos) => Expr> = {
+  text: (pos) => ({ type: "literal", value: "", pos }),
+  scalar: (pos) => ({ type: "literal", value: "", pos }),
+  number: (pos) => ({ type: "literal", value: 0, pos }),
+  boolean: (pos) => ({ type: "literal", value: false, pos }),
+  list: (pos) => ({ type: "list", items: [], pos }),
+};
+
+/** Every expression directly inside `expr`. */
+function childExprs(expr: Expr): readonly Expr[] {
+  switch (expr.type) {
+    case "literal":
+    case "state":
+    case "ident":
+      return [];
+    case "template":
+      return expr.parts;
+    case "list":
+      return expr.items;
+    case "object":
+      return expr.entries.map((entry) => entry.value);
+    case "unary":
+      return [expr.operand];
+    case "binary":
+      return [expr.left, expr.right];
+    case "conditional":
+      return [expr.test, expr.then, expr.else];
+    case "member":
+      return [expr.object];
+    case "index":
+      return [expr.object, expr.index];
+    case "call":
+      return [...expr.args, ...expr.named.map((arg) => arg.value)];
+    case "method":
+      return [expr.object, ...expr.args, ...expr.named.map((arg) => arg.value)];
+    case "arrow":
+      return [expr.body];
+  }
+}
+
+/**
+ * Declarations for inputs bound to a `$state` the spec never declares
+ * (`Radio($pick, …)` without `$pick = ""`): the state starts empty, the
+ * input's own empty value (a Slider or Stepper its literal `min`). Forgetting
+ * the declaration was the most common reason a reply's UI failed to render.
+ * A name close to a declared state or a named value stays an error, so a
+ * typo still gets its «Did you mean».
+ */
+function implicitInputStates(statements: readonly Statement[]): Statement[] {
+  const declared = new Set<string>();
+  const named = new Set<string>();
+  for (const statement of statements) {
+    if (statement.kind === "state") declared.add(statement.name);
+    else if (statement.kind === "named") named.add(statement.name);
+  }
+  const implicit = new Map<string, Statement>();
+  const visit = (expr: Expr): void => {
+    if (expr.type === "call") {
+      const spec = COMPONENT_SPECS.get(expr.name);
+      spec?.params.forEach((param, index) => {
+        if (param.kind !== "binding") return;
+        const slot = expr.args[index] ?? expr.named.find((arg) => arg.name === param.name)?.value;
+        if (slot?.type !== "state" || declared.has(slot.name) || implicit.has(slot.name) || named.has(slot.name)) return;
+        if (didYouMean(slot.name, declared) !== "" || didYouMean(slot.name, named) !== "") return;
+        const min = expr.args[1] ?? expr.named.find((arg) => arg.name === "min")?.value;
+        const startsAtMin = param.holds === "number" && spec.params[1]?.name === "min" && min?.type === "literal" && typeof min.value === "number";
+        const value = startsAtMin ? min : EMPTY_INPUT[param.holds ?? "scalar"](slot.pos);
+        implicit.set(slot.name, { kind: "state", name: slot.name, value, pos: slot.pos });
+      });
+    }
+    for (const child of childExprs(expr)) visit(child);
+  };
+  for (const statement of statements) visit(statement.value);
+  return [...implicit.values()];
+}
+
 interface Ref {
   readonly name: string;
   readonly pos: Pos;
@@ -205,9 +282,10 @@ class Validator {
 
   constructor(private readonly diagnostics: DiagnosticList) {}
 
-  run(statements: readonly Statement[]): Program {
+  run(written: readonly Statement[]): Program {
     const stateDecls: Decl[] = [];
     const roots: Expr[] = [];
+    const statements = [...implicitInputStates(written), ...written];
     for (const statement of statements) {
       if (statement.kind === "root") {
         roots.push(statement.value);
@@ -551,7 +629,12 @@ class Validator {
     }
     for (const arg of expr.named) {
       const index = spec.params.findIndex((param) => param.name === arg.name);
-      if (index < 0) {
+      if (index < 0 && arg.name === "source") {
+        // The reference asks for `source:` on data that is not from Load, and agents put it on the
+        // Card or Row around the data too. Only Table, Chart and Metric show it; anywhere else it
+        // is ignored rather than failing the whole block.
+        this.diagnostics.report(arg.pos, `\`${expr.name}\` shows no \`source:\`; it is ignored. Put it on the Table, Chart or Metric it describes.`, "warning");
+      } else if (index < 0) {
         const hint = didYouMean(arg.name, spec.params.map((param) => param.name));
         const why =
           hint === "" && Object.hasOwn(STYLE_ARGS, arg.name.toLowerCase())
