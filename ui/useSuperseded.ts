@@ -50,6 +50,12 @@ class ThreadOutlines {
     };
   }
 
+  /** Reads a thread's outline again: a finished turn's reply joins it without a user-message event. */
+  reread(threadId: string): void {
+    const entry = this.entries.get(threadId);
+    if (entry !== undefined) this.schedule(entry, threadId);
+  }
+
   private open(threadId: string): ThreadEntry {
     const entry: ThreadEntry = {
       items: null,
@@ -232,12 +238,18 @@ export function useReplyIndex(threadId: string, messageId: string): number | nul
 
 /**
  * The replies of thread `threadId` whose questions the user has not answered
- * and that machine messages have pushed up the thread (see `openReplies`),
- * from the same shared outline. Empty until the outline is read.
+ * (see `openReplies`), from the same shared outline; the newest turn's only
+ * while the thread is not `running`. Empty until the outline is read. When a
+ * turn ends, the outline is read again, so its reply is listed.
  */
-export function useOpenReplies(threadId: string): OpenReplies {
+export function useOpenReplies(threadId: string, running: boolean): OpenReplies {
   const store = outlinesFor(useSdk());
   const subscribe = useCallback((listener: () => void) => store.listen(threadId, listener), [store, threadId]);
   const items = useSyncExternalStore(subscribe, () => store.items(threadId));
-  return useMemo(() => openReplies(items), [items]);
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) store.reread(threadId);
+    wasRunning.current = running;
+  }, [store, threadId, running]);
+  return useMemo(() => openReplies(items, { newest: !running }), [items, running]);
 }

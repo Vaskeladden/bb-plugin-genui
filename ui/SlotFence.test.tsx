@@ -6,6 +6,7 @@ import type * as PluginSdkApp from "@get-bb/plugin-sdk/app";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExperimentalCodeFenceRendererProps, PluginSettingsState } from "@get-bb/plugin-sdk/app";
 import { SlotFence } from "./SlotFence";
+import { nextMoveKey, showInNextMove } from "./nextMove";
 
 /** The plugin's settings as BB serves them: a store its subscribers re-render from, like BB's query. */
 const settings = vi.hoisted(() => {
@@ -62,6 +63,23 @@ afterEach(() => {
 });
 
 describe("SlotFence completion", () => {
+  it("folds a ui block shown in Your next move to a pointer, and opens it again when the box lets go", () => {
+    const code = 'Card("Caching", [Button("Use in memory"), Button("Use Redis")])';
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    settings.set({ animations: false });
+    const release = showInNextMove([nextMoveKey(message.id, 0)]);
+    render("ui", "closed", code);
+    expect(container.textContent).toContain("Answer in Your next move below");
+    expect(container.querySelector("button")).toBeNull();
+    // A second message field showing it too: the reply stays folded until both let go.
+    const other = showInNextMove([nextMoveKey(message.id, 0)]);
+    act(() => release());
+    expect(container.textContent).toContain("Answer in Your next move below");
+    act(() => other());
+    expect(container.textContent).toContain("Use Redis");
+    expect(container.textContent).not.toContain("Answer in Your next move below");
+  });
+
   it("runs the app only after its fence closes, without restarting it on a repeated closed update", () => {
     render("app", "streaming", html);
     // While it streams, only the preview frame, which never runs the model's scripts.
