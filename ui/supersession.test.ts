@@ -106,33 +106,42 @@ describe("openReplies", () => {
   const user = (seq: number, machine = false): OutlineItem => ({ id: `thr_a:user-seed:${seq}`, role: "user", machine });
   const reply = (id: string): OutlineItem => ({ id, role: "assistant" });
 
-  it("is empty while the unanswered reply is the newest turn", () => {
-    expect(openReplies([user(1), reply("a1"), reply("a2")])).toEqual({ ids: [], turns: 0 });
+  it("lists the newest turn's replies once the turn has finished", () => {
+    expect(openReplies([user(1), reply("a1"), reply("a2")])).toEqual({ ids: ["a1", "a2"], turns: 1 });
+    expect(openReplies([user(1), reply("ask"), user(5, true), reply("ci is green")])).toEqual({ ids: ["ask", "ci is green"], turns: 2 });
     expect(openReplies(null)).toEqual({ ids: [], turns: 0 });
+  });
+
+  it("lists only what came after the user's own last message", () => {
+    expect(openReplies([user(1), reply("old"), user(5), reply("new")])).toEqual({ ids: ["new"], turns: 1 });
+  });
+
+  it("leaves out the newest turn while it runs", () => {
+    expect(openReplies([user(1), reply("a1"), reply("a2")], { newest: false })).toEqual({ ids: [], turns: 0 });
   });
 
   it("lists a reply that a machine message has pushed up, with the turns to read", () => {
     const outline = [user(1), reply("ask"), user(5, true), reply("ci is green")];
-    expect(openReplies(outline)).toEqual({ ids: ["ask"], turns: 2 });
+    expect(openReplies(outline, { newest: false })).toEqual({ ids: ["ask"], turns: 2 });
   });
 
   it("lists every unanswered reply before the newest machine message, oldest first", () => {
     const outline = [user(1), reply("old"), user(4), reply("ask"), user(8, true), reply("more"), user(12, true), reply("newest")];
-    expect(openReplies(outline)).toEqual({ ids: ["ask", "more"], turns: 3 });
+    expect(openReplies(outline, { newest: false })).toEqual({ ids: ["ask", "more"], turns: 3 });
   });
 
   it("is empty once the user has written since", () => {
-    expect(openReplies([user(1), reply("ask"), user(5, true), reply("news"), user(9), reply("thanks")])).toEqual({ ids: [], turns: 0 });
+    expect(openReplies([user(1), reply("ask"), user(5, true), reply("news"), user(9), reply("thanks")], { newest: false })).toEqual({ ids: [], turns: 0 });
   });
 
   it("does not let an out-of-sequence row at the end count as a later message", () => {
     const outline = [user(10), reply("ask"), user(3)];
-    expect(openReplies(outline)).toEqual({ ids: [], turns: 0 });
+    expect(openReplies(outline, { newest: false })).toEqual({ ids: [], turns: 0 });
   });
 
   it("agrees with hasLaterUserMessage on every reply it lists", () => {
     const outline = [user(1), reply("a"), user(4, true), reply("b"), user(2), reply("c"), user(9, true), reply("d")];
-    const { ids } = openReplies(outline);
+    const { ids } = openReplies(outline, { newest: false });
     expect(ids).toEqual(["a", "b", "c"]);
     for (const id of ids) expect(hasLaterUserMessage(outline, id)).toBe(false);
   });

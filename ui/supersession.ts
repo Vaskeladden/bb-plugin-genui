@@ -86,13 +86,12 @@ export interface OpenReplies {
 }
 
 /**
- * The assistant replies the user has not answered and no longer has at the
- * end of the thread: those after the last message the user wrote (by the
- * rules of `hasLaterUserMessage`) that a machine message has followed. The
- * replies of the newest turn are left out: they stand right above the
- * message field already.
+ * The assistant replies the user has not answered: those after the last
+ * message the user wrote (by the rules of `hasLaterUserMessage`). The replies
+ * of the newest turn count only with `newest` (the turn has finished): while
+ * it runs, its text is still being written.
  */
-export function openReplies(items: readonly OutlineItem[] | null): OpenReplies {
+export function openReplies(items: readonly OutlineItem[] | null, { newest = true }: { newest?: boolean } = {}): OpenReplies {
   if (items === null) return { ids: [], turns: 0 };
   let highest = -1;
   let written = -1;
@@ -106,7 +105,8 @@ export function openReplies(items: readonly OutlineItem[] | null): OpenReplies {
     if (seq !== null) highest = seq;
   });
   const open: number[] = [];
-  for (let index = written + 1; index < newestUser; index++) if (items[index]?.role === "assistant") open.push(index);
+  const end = newest ? items.length : newestUser;
+  for (let index = written + 1; index < end; index++) if (items[index]?.role === "assistant") open.push(index);
   const kept = open.slice(-MAX_OPEN_REPLIES);
   const first = kept[0];
   if (first === undefined) return { ids: [], turns: 0 };

@@ -4,8 +4,8 @@
 // The Gen-UI Gallery page renders the example specs in gallery/.
 // The Status board tab shows the report a thread's agent published with
 // show_board, and opens by itself when a new version arrives.
-// The open-questions banner keeps a thread's unanswered questions above its
-// message field once machine messages have pushed them up the thread.
+// "Your next move" (the open-questions banner) keeps a thread's newest
+// unanswered question above its message field, the one place to answer it.
 //
 // Compiled by `bb plugin build` into dist/app.js + dist/app.css. React and
 // @get-bb/plugin-sdk/app are provided by the BB app at load time (never

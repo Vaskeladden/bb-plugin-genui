@@ -1,13 +1,14 @@
-// The newest question a thread's agent asked that the user has not answered,
-// kept above the message field. A reply's Form, Buttons, Plan or Decision stays
-// answerable where it stands, but a CI result, a run result or another
-// thread's message pushes it up the thread, where it is easy to miss. This
-// banner shows those blocks again, as the same blocks: one identity (message,
+// "Your next move": the newest question a thread's agent asked that the user
+// has not answered, kept above the message field. A reply's Form, Buttons,
+// Plan or Decision shows here as the same block: one identity (message,
 // fence, state key) with the copy in the reply, so a pick made here is staged
-// in the same answers block and both copies close when the user sends.
+// in the same answers block. While the box shows a block, the reply's copy
+// folds to a line pointing here (ui/nextMove.ts), so it is answered in one
+// place, wherever the reply has scrolled to. A CI result, a run result or
+// another thread's message after the question leaves it open here.
 //
-// Nothing is shown while the unanswered reply is the thread's newest turn:
-// it stands right above the message field already.
+// While the agent's turn runs, only questions from earlier turns show: the
+// running turn's text is still being written.
 import { useEffect, useRef, useState, type ReactElement, type RefObject } from "react";
 import { useComposer, useSdk, type PluginBrowserBbSdk as Sdk } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
@@ -15,6 +16,7 @@ import { compile } from "../core";
 import { boardSegments } from "../core/board";
 import { asksQuestion } from "../core/questions";
 import { Fence, useThreadActions } from "./Fence";
+import { nextMoveKey, showInNextMove } from "./nextMove";
 import type { OpenReplies } from "./supersession";
 import { useOpenReplies } from "./useSuperseded";
 
@@ -165,12 +167,15 @@ function useQuestionInView(blocks: readonly QuestionBlock[], folded: boolean): R
   return scroller;
 }
 
-function OpenQuestions({ threadId }: { threadId: string }): ReactElement | null {
-  const blocks = useQuestionBlocks(threadId, useOpenReplies(threadId));
+function OpenQuestions({ threadId, running }: { threadId: string; running: boolean }): ReactElement | null {
+  const blocks = useQuestionBlocks(threadId, useOpenReplies(threadId, running));
   const actions = useThreadActions();
   const [folded, setFolded] = useState(() => readFolded(threadId));
   useEffect(() => setFolded(readFolded(threadId)), [threadId]);
   const scroller = useQuestionInView(blocks, folded);
+  // Folded, the box shows no block: the reply keeps its own copy open.
+  const keys = folded ? "" : blocks.map((block) => nextMoveKey(block.messageId, block.index)).join("\n");
+  useEffect(() => (keys === "" ? undefined : showInNextMove(keys.split("\n"))), [keys]);
   if (blocks.length === 0) return null;
   const toggle = (): void => {
     const next = !folded;
@@ -183,15 +188,18 @@ function OpenQuestions({ threadId }: { threadId: string }): ReactElement | null 
     }
   };
   return (
-    <section aria-label="Open questions" data-genui-open-questions="" className="mb-1 flex min-w-0 flex-col rounded-lg border border-border bg-background">
+    <section aria-label="Your next move" data-genui-open-questions="" className="mb-1 flex min-w-0 flex-col rounded-lg border border-border bg-background">
       <button
         type="button"
         aria-expanded={!folded}
         onClick={toggle}
         className="flex min-h-10 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-3 text-left text-xs font-medium hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
-        <Icon name="CircleQuestion" aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">{blocks.length === 1 ? "1 question waits for your answer" : `${blocks.length} questions wait for your answer`}</span>
+        <Icon name="MessageCircle" aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Your next move</span>
+        <span className="min-w-0 flex-1 truncate text-right font-normal text-muted-foreground">
+          {folded ? (blocks.length === 1 ? "1 question waits" : `${blocks.length} questions wait`) : "Pick, then send"}
+        </span>
         <Icon name={folded ? "ChevronRight" : "ChevronDown"} aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       </button>
       {folded ? null : (
@@ -219,5 +227,5 @@ function OpenQuestions({ threadId }: { threadId: string }): ReactElement | null 
 /** The composer banner: a thread's message field only, since a new thread has no replies. */
 export function OpenQuestionsBanner(): ReactElement | null {
   const composer = useComposer();
-  return composer.scope.kind === "thread" ? <OpenQuestions threadId={composer.scope.threadId} /> : null;
+  return composer.scope.kind === "thread" ? <OpenQuestions threadId={composer.scope.threadId} running={composer.isRunning === true} /> : null;
 }

@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-// The banner above the message field: a question a machine message pushed up
-// the thread is shown again there, as the same block; a question that is the
-// newest turn, or that the user answered, is not.
+// "Your next move" above the message field: the newest unanswered question is
+// shown there as the same block, also when a machine message pushed it up the
+// thread; the reply's copy folds to a pointer. A question the user answered,
+// or one in a turn still running, is not shown.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type * as PluginSdkApp from "@get-bb/plugin-sdk/app";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenQuestionsBanner, questionBlocks } from "./OpenQuestions";
+import { useInNextMove } from "./nextMove";
 
 const ASK = '```ui\nCard("Caching", [Button("Use in memory"), Button("Use Redis")])\n```';
 const REPORT = '```ui\nCard("Result", [Metric("Tests", "494")])\n```';
@@ -59,12 +61,12 @@ const { sdk, scope } = vi.hoisted(() => {
       }),
     },
   };
-  return { sdk, scope: { current: { kind: "thread", threadId: "pushed" } as { kind: string; threadId?: string } } };
+  return { sdk, scope: { current: { kind: "thread", threadId: "pushed" } as { kind: string; threadId?: string }, running: false } };
 });
 
 vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
   ...(await importOriginal<typeof PluginSdkApp>()),
-  useComposer: () => ({ scope: scope.current }),
+  useComposer: () => ({ scope: scope.current, isRunning: scope.running }),
   useComposers: () => [],
   useSdk: () => sdk,
   useBbNavigate: () => ({}),
@@ -76,8 +78,9 @@ vi.mock("@get-bb/plugin-sdk/app", async (importOriginal) => ({
 let container: HTMLDivElement;
 let root: Root;
 
-async function show(threadId: string | null): Promise<void> {
+async function show(threadId: string | null, running = false): Promise<void> {
   scope.current = threadId === null ? { kind: "new-thread" } : { kind: "thread", threadId };
+  scope.running = running;
   await act(async () => {
     root.render(<OpenQuestionsBanner key={threadId} />);
   });
@@ -125,7 +128,7 @@ describe("questionBlocks", () => {
 describe("OpenQuestionsBanner", () => {
   it("shows a question a machine message pushed up the thread, as the reply's own block", async () => {
     await show("pushed");
-    expect(banner()?.textContent).toContain("1 question waits for your answer");
+    expect(banner()?.textContent).toContain("Your next move");
     expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(expect.arrayContaining(["Use in memory", "Use Redis"]));
     expect(container.querySelector('[data-genui-renderer="composer"] button:disabled')).toBeNull();
     expect(sdk.threads.timeline).toHaveBeenCalledTimes(2);
@@ -134,16 +137,36 @@ describe("OpenQuestionsBanner", () => {
 
   it("shows only the newest reply that asks", async () => {
     await show("twice");
-    expect(banner()?.textContent).toContain("1 question waits for your answer");
     const labels = [...container.querySelectorAll('[data-genui-renderer="composer"] button')].map((button) => button.textContent);
     expect(labels).toEqual(expect.arrayContaining(["Small", "Large"]));
     expect(labels).not.toContain("Use Redis");
   });
 
-  it("shows nothing while the question is the newest turn, and reads no timeline", async () => {
+  it("shows the newest turn's question once the turn has finished", async () => {
     await show("newest");
+    const labels = [...container.querySelectorAll('[data-genui-renderer="composer"] button')].map((button) => button.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["Use in memory", "Use Redis"]));
+  });
+
+  it("shows nothing from a turn still running, and reads no timeline", async () => {
+    await show("newest", true);
     expect(banner()).toBeNull();
     expect(sdk.threads.timeline).not.toHaveBeenCalled();
+  });
+
+  it("tells the reply's copy that it is answered in the box, until the box folds", async () => {
+    let inBox: boolean | null = null;
+    function Probe(): null {
+      inBox = useInNextMove("newest:assistant:1", 0);
+      return null;
+    }
+    const probe = createRoot(document.createElement("div"));
+    act(() => probe.render(<Probe />));
+    await show("newest");
+    expect(inBox).toBe(true);
+    act(() => banner()?.querySelector("button")?.click());
+    expect(inBox).toBe(false);
+    act(() => probe.unmount());
   });
 
   it("shows nothing once the user has written since", async () => {
@@ -168,7 +191,7 @@ describe("OpenQuestionsBanner", () => {
     act(() => heading?.click());
     expect(heading?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector('[data-genui-renderer="composer"]')).toBeNull();
-    expect(banner()?.textContent).toContain("1 question waits for your answer");
+    expect(banner()?.textContent).toContain("1 question waits");
     act(() => root.unmount());
     root = createRoot(container);
     await show("pushed");

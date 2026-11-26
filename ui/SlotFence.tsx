@@ -1,12 +1,24 @@
 // Renderer for BB's experimental_codeFenceRenderer slot (get-bb/bb#5387).
 import type { ExperimentalCodeFenceRendererProps } from "@get-bb/plugin-sdk/app";
+import { Icon } from "@/components/ui/icon";
 import { Fence, useThreadActions, type FenceLanguage } from "./Fence";
+import { useInNextMove } from "./nextMove";
 
 export const FENCE_LANGUAGES: readonly FenceLanguage[] = ["ui", "app"];
 
 export function SlotFence({ code, language, status, index, message, Original }: ExperimentalCodeFenceRendererProps) {
   const actions = useThreadActions();
+  const inNextMove = useInNextMove(message.id, index);
   if (language !== "ui" && language !== "app") return <Original />;
+  // Shown in "Your next move" above the message field: answered there, not twice.
+  if (language === "ui" && inNextMove) {
+    return (
+      <div data-genui-fence="" data-genui-renderer="slot" data-genui-in-next-move="" className="my-1 flex items-center gap-2 text-xs text-muted-foreground">
+        <Icon name="MessageCircle" aria-hidden className="size-3.5 shrink-0" />
+        <span>Answer in Your next move below</span>
+      </div>
+    );
+  }
   // Interrupted HTML remains source: never execute a document without its closing fence.
   if (language === "app" && status === "unclosed") return <Original />;
   return (
