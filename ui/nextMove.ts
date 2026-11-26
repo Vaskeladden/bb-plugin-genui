@@ -4,7 +4,8 @@
 // separate React roots, so this is a module-level store they subscribe to.
 import { useSyncExternalStore } from "react";
 
-const shown = new Set<string>();
+/** Block key → how many boxes show it: a thread can have more than one message field on screen. */
+const shown = new Map<string, number>();
 const listeners = new Set<() => void>();
 
 /** A block's key: its reply and its index among the reply's ```ui blocks. */
@@ -16,10 +17,14 @@ function changed(): void {
 
 /** Puts `keys` in the box in place of what it showed; returns what takes them out again. */
 export function showInNextMove(keys: readonly string[]): () => void {
-  for (const key of keys) shown.add(key);
+  for (const key of keys) shown.set(key, (shown.get(key) ?? 0) + 1);
   changed();
   return () => {
-    for (const key of keys) shown.delete(key);
+    for (const key of keys) {
+      const count = (shown.get(key) ?? 1) - 1;
+      if (count > 0) shown.set(key, count);
+      else shown.delete(key);
+    }
     changed();
   };
 }

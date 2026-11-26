@@ -71,7 +71,11 @@ describe("SlotFence completion", () => {
     render("ui", "closed", code);
     expect(container.textContent).toContain("Answer in Your next move below");
     expect(container.querySelector("button")).toBeNull();
+    // A second message field showing it too: the reply stays folded until both let go.
+    const other = showInNextMove([nextMoveKey(message.id, 0)]);
     act(() => release());
+    expect(container.textContent).toContain("Answer in Your next move below");
+    act(() => other());
     expect(container.textContent).toContain("Use Redis");
     expect(container.textContent).not.toContain("Answer in Your next move below");
   });
