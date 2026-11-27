@@ -69,7 +69,7 @@
     "cron-parser": "^5.5.0",
     "hono": "^4.11.9",
     "jsdom": "^31.0.0",
-    "playwright-core": "1.65.0",
+    "playwright-core": "1.65.1",
     "sonner": "^2.0.0",
     "tailwind-merge": "^3.4.0",
     "typescript": "^7.0.0",
